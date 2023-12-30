@@ -3,11 +3,11 @@ from copy import deepcopy
 import pytest
 from langchain.prompts import ChatPromptTemplate
 
-from ix.agents.callback_manager import IxCallbackManager
 from ix.chains.llm_chain import LLMChain, TEMPLATE_CLASSES
 from ix.chains.loaders.prompts import create_message
+from ix.chains.tests.mock_configs import OPENAI_LLM, MOCK_MEMORY
 from ix.chains.tests.mock_memory import MockMemory
-from ix.chains.tests.test_config_loader import OPENAI_LLM, MOCK_MEMORY
+from ix.chains.tests.test_config_loader import unpack_chain_flow
 
 PROMPT_TEMPLATE = {
     "class_path": "langchain.prompts.chat.ChatPromptTemplate",
@@ -58,7 +58,8 @@ class TestChatPromptTemplate:
 
     def test_from_config(self, load_chain):
         config = deepcopy(PROMPT_TEMPLATE)
-        chain = load_chain(config)
+        flow = load_chain(config)
+        chain = unpack_chain_flow(flow)
         assert isinstance(chain, ChatPromptTemplate)
         assert len(chain.messages) == 3
         assert isinstance(chain.messages[0], TEMPLATE_CLASSES["system"])
@@ -70,7 +71,8 @@ class TestChatPromptTemplate:
 class TestLLMChain:
     def test_from_config(self, load_chain, mock_openai_key):
         config = deepcopy(EXAMPLE_CONFIG)
-        chain = load_chain(config)
+        flow = load_chain(config)
+        chain = unpack_chain_flow(flow)
 
         assert isinstance(chain, LLMChain)
         assert (
@@ -80,5 +82,4 @@ class TestLLMChain:
             ]
         )
         assert chain.prompt.messages[1].prompt.partial_variables == {}
-        assert isinstance(chain.callbacks, IxCallbackManager)
         assert isinstance(chain.memory, MockMemory)

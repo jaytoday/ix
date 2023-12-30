@@ -2,11 +2,12 @@ import logging
 import uuid
 from asgiref.sync import sync_to_async
 from functools import cached_property
-from typing import Any, Dict
+from typing import Any, Dict, Type
 
 from django.db import models
-from langchain.chains.base import Chain as LangChain
+from langchain.schema.runnable import Runnable
 
+from ix.ix_users.models import OwnedModel
 from ix.pg_vector.tests.models import PGVectorMixin
 from ix.pg_vector.utils import get_embedding
 
@@ -21,6 +22,9 @@ class NodeTypeQuery(PGVectorMixin, models.QuerySet):
 
 
 class NodeTypeManager(models.Manager.from_queryset(NodeTypeQuery)):
+    def get_by_natural_key(self, class_path):
+        return self.get(class_path=class_path)
+
     def create_with_embedding(self, name, description, class_path):
         """
         Creates a new NodeType object with a vector embedding generated
@@ -36,7 +40,7 @@ class NodeTypeManager(models.Manager.from_queryset(NodeTypeQuery)):
         )
 
 
-class NodeType(models.Model):
+class NodeType(OwnedModel):
     TYPES = [
         ("agent", "agent"),
         ("chain", "chain"),
@@ -54,18 +58,28 @@ class NodeType(models.Model):
         ("text_splitter", "text_splitter"),
     ]
 
+    # info
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
     description = models.TextField(null=True)
-    class_path = models.CharField(max_length=255)
+    class_path = models.CharField(max_length=255, unique=True)
     type = models.CharField(max_length=255)
+
+    # deprecated
     display_type = models.CharField(
         max_length=10,
         default="node",
         choices=(("node", "node"), ("list", "list"), ("map", "map")),
     )
+
+    # structure
     connectors = models.JSONField(null=True)
     fields = models.JSONField(null=True)
+    field_groups = models.JSONField(null=True)
+
+    # variable to load context in when loading node. Generally only used by IX
+    # internal components like ChainReference that need to load a chain.
+    context = models.CharField(max_length=32, null=True)
 
     # child_field is the name of the field that contains child nodes
     # used for parsing config objects
@@ -74,12 +88,17 @@ class NodeType(models.Model):
     # JSONSchema for the config object
     config_schema = models.JSONField(default=dict)
 
+    objects = NodeTypeManager()
+
     @cached_property
     def connectors_as_dict(self):
         return {c["key"]: c for c in self.connectors or []}
 
     def __str__(self):
         return f"{self.class_path}"
+
+    def natural_key(self):
+        return (self.class_path,)
 
 
 def default_position():
@@ -97,6 +116,8 @@ class ChainNodeManager(models.Manager):
         definition is used to recursively identify and parse nested property nodes
         and child nodes.
         """
+        # create copy of config since it will be mutated
+        config = config.copy()
 
         # get the node type
         class_path = config["class_path"]
@@ -109,7 +130,7 @@ class ChainNodeManager(models.Manager):
             raise
 
         # pop off nested and child nodes before creating node
-        node_config = config.get("config", {}).copy()
+        node_config = config.pop("config", {}).copy()
         property_configs = {}
         child_configs = []
         for connector in node_type.connectors or []:
@@ -128,6 +149,7 @@ class ChainNodeManager(models.Manager):
                 node_type=node_type,
                 root=root,
                 position={"x": 0, "y": 0},
+                config=node_config,
                 **config,
             )
 
@@ -144,9 +166,10 @@ class ChainNodeManager(models.Manager):
                     ChainEdge.objects.create(
                         chain_id=node.chain_id,
                         source=nested_node,
+                        source_key=nested_node.node_type.type,
                         target=node,
                         relation="PROP",
-                        key=key,
+                        target_key=key,
                     )
         elif property_configs:
             logger.error(
@@ -182,6 +205,8 @@ class ChainNodeManager(models.Manager):
                         chain=chain,
                         source=source_node,
                         target=latest_child,
+                        source_key="out",
+                        target_key="in",
                         relation="LINK",
                     )
 
@@ -192,7 +217,8 @@ class ChainNodeManager(models.Manager):
                         source=latest_child,
                         target=node,
                         relation="PROP",
-                        key=node_type.child_field,
+                        source_key=latest_child.node_type.type,
+                        target_key=node_type.child_field,
                     )
 
         logger.debug(f"created node_id={node.id} class_path={node.class_path}")
@@ -222,19 +248,14 @@ class ChainNode(models.Model):
         blank=True,
     )
 
+    incoming_edges: models.QuerySet["ChainEdge"]
+    outgoing_edges: models.QuerySet["ChainEdge"]
+    DoesNotExist: Type[models.ObjectDoesNotExist]
+
     objects = ChainNodeManager()
 
     def __str__(self):
         return f"{str(self.id)[:8]} ({self.class_path})"
-
-    def load(self, callback_manager, root=True):
-        """
-        Load this node, traversing the graph and loading all child nodes,
-        properties, and downstream nodes.
-        """
-        from ix.chains.loaders.core import load_node
-
-        return load_node(self, callback_manager, root=root)
 
 
 class ChainEdge(models.Model):
@@ -247,7 +268,10 @@ class ChainEdge(models.Model):
     target = models.ForeignKey(
         ChainNode, on_delete=models.CASCADE, related_name="incoming_edges"
     )
-    key = models.CharField(max_length=255, null=True)
+
+    source_key = models.CharField(max_length=255, null=True)
+    target_key = models.CharField(max_length=255, null=True)
+
     chain = models.ForeignKey(
         "Chain", on_delete=models.CASCADE, related_name="edges", null=True
     )
@@ -256,8 +280,10 @@ class ChainEdge(models.Model):
         max_length=4, null=True, choices=RELATION_CHOICES, default="LINK"
     )
 
+    DoesNotExist: Type[models.ObjectDoesNotExist]
 
-class Chain(models.Model):
+
+class Chain(OwnedModel):
     """
     A named chain that can be run by an Agent.
 
@@ -269,6 +295,12 @@ class Chain(models.Model):
     description = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # Indicate that this chain is an agent. This is used to record the config choice.
+    # The endpoints are responsible for ensuring that the agent does or does not exist.
+    is_agent = models.BooleanField(default=True)
+
+    nodes: models.QuerySet[ChainNode]
+
     @property
     def root(self) -> ChainNode:
         try:
@@ -279,12 +311,15 @@ class Chain(models.Model):
     def __str__(self):
         return f"{self.name} ({self.id})"
 
-    def load_chain(self, callback_manager) -> LangChain:
-        return self.root.load(callback_manager)
+    def load_chain(self, context) -> Runnable:
+        from ix.chains.loaders.core import init_chain_flow
 
-    async def aload_chain(self, callback_manager) -> LangChain:
-        root = await ChainNode.objects.aget(chain_id=self.id, root=True)
-        return await sync_to_async(root.load)(callback_manager)
+        return init_chain_flow(self, context=context)
+
+    async def aload_chain(self, context) -> Runnable:
+        from ix.chains.loaders.core import init_chain_flow
+
+        return await sync_to_async(init_chain_flow)(self, context=context)
 
     def clear_chain(self):
         """removes the chain nodes associated with this chain"""

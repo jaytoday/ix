@@ -2,10 +2,11 @@ import uuid
 
 from django.db import models
 from ix.agents.models import Agent, Resource
+from ix.ix_users.models import OwnedModel
 from ix.task_log.models import Task, Artifact
 
 
-class Chat(models.Model):
+class Chat(OwnedModel):
     """
     A chat is a conversation between one or more agents. A chat includes a lead agent who
     is responsible for the chat. The lead agent will respond or delegate questions to other
@@ -29,6 +30,10 @@ class Chat(models.Model):
     task = models.ForeignKey(
         Task, on_delete=models.CASCADE, related_name="leading_chats"
     )
+
+    # Test chat flag indicates this was created by the editor. It may be hidden from
+    # other places in the user interface.
+    is_test = models.BooleanField(default=False)
 
     def get_agent_process(self):
         return self.agent.get_agent_process(self.task)

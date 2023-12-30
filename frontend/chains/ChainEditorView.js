@@ -1,85 +1,136 @@
-import React, { useEffect, useState } from "react";
-import { v4 as uuid4 } from "uuid";
-import { usePreloadedQuery } from "react-relay/hooks";
-import { useQueryLoader } from "react-relay";
+import React, { useCallback, useEffect } from "react";
 import { useParams } from "react-router-dom";
-import { Spinner, VStack } from "@chakra-ui/react";
+import { HStack, Spinner, useToast, VStack } from "@chakra-ui/react";
+import { ReactFlowProvider, useReactFlow } from "reactflow";
 
 import { Layout, LayoutContent, LayoutLeftPane } from "site/Layout";
-import { ChainGraphByIdQuery } from "chains/graphql/ChainGraphByIdQuery";
 import ChainGraphEditor from "chains/ChainGraphEditor";
-import { ChainGraphEditorSideBar } from "chains/editor/ChainGraphEditorSideBar";
+import { useDetailAPI } from "utils/hooks/useDetailAPI";
+import { useObjectEditorView } from "utils/hooks/useObjectEditorView";
+import { useChainEditorAPI } from "chains/hooks/useChainEditorAPI";
+import { ChainEditorAPIContext } from "chains/editor/ChainEditorAPIContext";
+import {
+  useNodeEditorState,
+  useSelectedNode,
+} from "chains/hooks/useSelectedNode";
+import {
+  SelectedNodeContext,
+  NodeStateContext,
+  NodeEditorContext,
+  ChainState,
+  ChainTypes,
+} from "chains/editor/contexts";
+import { EditorRightSidebar } from "chains/editor/EditorRightSidebar";
+import { useNodeState } from "chains/hooks/useNodeState";
+import { useChainState } from "chains/hooks/useChainState";
+import { NodeTypeSearchButton } from "chains/editor/NodeTypeSearchButton";
+import { AgentCardListButton } from "agents/AgentCardListButton";
+import { EditorAgentCard } from "chains/editor/sidebar/EditorAgentCard";
+import { ChainCardListButton } from "chains/ChainCardListButton";
+import { RunLogProvider } from "chains/editor/run_log/RunLogProvider";
+import { RunLogMenuButton } from "chains/editor/run_log/RunLogMenuButton";
 
-const ChainEditorShim = ({ chainQueryRef }) => {
-  const { graph } = usePreloadedQuery(ChainGraphByIdQuery, chainQueryRef);
-  return <ChainGraphEditor graph={graph} />;
+const ChainEditorProvider = ({ graph, onError, children }) => {
+  const chainState = useChainState(graph);
+  const nodeState = useNodeState(graph?.chain, graph?.nodes);
+  const selectedNode = useSelectedNode();
+  const nodeEditor = useNodeEditorState(
+    selectedNode,
+    nodeState.nodes,
+    nodeState.setNode
+  );
+
+  const reactFlowInstance = useReactFlow();
+  const api = useChainEditorAPI({
+    chain: graph?.chain,
+    reactFlowInstance,
+    onError,
+  });
+
+  useEffect(() => {
+    if (graph?.chain?.id !== chainState?.chain?.id) {
+      chainState.setChain(graph?.chain);
+    }
+  }, [graph?.chain?.id, chainState.chain]);
+
+  return (
+    <ChainTypes.Provider value={graph?.types}>
+      <ChainState.Provider value={chainState}>
+        <NodeStateContext.Provider value={nodeState}>
+          <NodeEditorContext.Provider value={nodeEditor}>
+            <SelectedNodeContext.Provider value={selectedNode}>
+              <ChainEditorAPIContext.Provider value={api}>
+                <RunLogProvider chain_id={graph?.chain?.id}>
+                  {children}
+                </RunLogProvider>
+              </ChainEditorAPIContext.Provider>
+            </SelectedNodeContext.Provider>
+          </NodeEditorContext.Provider>
+        </NodeStateContext.Provider>
+      </ChainState.Provider>
+    </ChainTypes.Provider>
+  );
 };
 
 export const ChainEditorView = () => {
-  const [chainQueryRef, loadChainQuery] = useQueryLoader(ChainGraphByIdQuery);
   const { id } = useParams();
+  const { response, call, isLoading } = useDetailAPI(`/api/chains/${id}/graph`);
+  const { isNew, idRef } = useObjectEditorView(id, call);
+  const toast = useToast();
 
-  // state for handling whether how to load the data (new vs existing)
-  // and when to reset the editor when opened. The cached state does not
-  // reset when the url changes as protection against reloading when
-  // creating new chains. This state tracks when to reset the cache.
-  const [idRef, setIdRef] = useState(null);
-  const [isNew, setIsNew] = useState(null);
-  const [wasCreated, setWasCreated] = useState(null);
-  useEffect(() => {
-    const firstRender = isNew === null;
-    if (firstRender) {
-      // first render caches whether this started as a new chain
-      setIsNew(id === undefined);
-    } else {
-      // switch from existing to new
-      if (id === undefined && !isNew) {
-        setIsNew(true);
-        setWasCreated(false);
-      }
-      // a new chain was created
-      if (id !== undefined && isNew) {
-        setWasCreated(true);
-      }
-      // switch from created to new
-      if (id === undefined && wasCreated) {
-        setIsNew(true);
-        setWasCreated(false);
-        setIdRef(uuid4());
-      }
-    }
-  }, [id]);
+  // Defer to isNew to determine if graph response is current for
+  // UX state. This is necessary because the graph response is not cleared when
+  // switching to a new chain. Also check that the id matches the response id.
+  // to avoid rendering stale state when first loading a newly created chain.
+  const graph =
+    isNew || id !== response?.data?.chain?.id ? null : response?.data;
 
-  useEffect(() => {
-    // load chain if id is provided on view load
-    // otherwise state will be handled internally by the editor
-    if (isNew === false) {
-      loadChainQuery({ id }, { fetchPolicy: "network-only" });
-      setIdRef(id);
-    } else {
-      setIdRef(uuid4());
-    }
-  }, [isNew]);
+  const onAPIError = useCallback((err) => {
+    toast({
+      title: "Error",
+      description: `Failed to save chain. ${err.message}`,
+      status: "error",
+      duration: 10000,
+      isClosable: true,
+    });
+  }, []);
 
   let content;
   if (isNew) {
     content = <ChainGraphEditor key={idRef} />;
-  } else if (!chainQueryRef) {
+  } else if (isLoading || !graph) {
     content = <Spinner />;
   } else {
-    content = <ChainEditorShim chainQueryRef={chainQueryRef} />;
+    content = <ChainGraphEditor graph={graph} />;
   }
 
   return (
-    <Layout>
-      <LayoutLeftPane>
-        <ChainGraphEditorSideBar />
-      </LayoutLeftPane>
-      <LayoutContent>
-        <VStack alignItems="start" p={5} spacing={4}>
-          {content}
-        </VStack>
-      </LayoutContent>
-    </Layout>
+    <ReactFlowProvider>
+      <ChainEditorProvider graph={graph} onError={onAPIError}>
+        <Layout>
+          <LayoutLeftPane>
+            <AgentCardListButton Card={EditorAgentCard} />
+            <ChainCardListButton />
+            <NodeTypeSearchButton />
+            <RunLogMenuButton />
+          </LayoutLeftPane>
+          <LayoutContent>
+            <HStack>
+              <VStack
+                alignItems="start"
+                pl={0}
+                pr={2}
+                pt={5}
+                pb={2}
+                spacing={4}
+              >
+                {content}
+              </VStack>
+              <EditorRightSidebar />
+            </HStack>
+          </LayoutContent>
+        </Layout>
+      </ChainEditorProvider>
+    </ReactFlowProvider>
   );
 };

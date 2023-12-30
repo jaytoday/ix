@@ -1,20 +1,24 @@
 import React, { useEffect, useRef } from "react";
 import { Box } from "@chakra-ui/react";
-import ChatMessage from "chat/ChatMessage";
-import { useMessagesContext } from "chat/graphql/useChatMessageSubscription";
+import ChatMessage from "chat/messages/ChatMessage";
+import { useMessagesContext } from "chat/hooks/useChatMessageSubscription";
+import { useMessagesTokenContext } from "chat/hooks/useChatMessageTokenSubscription";
+import { useChatStyle } from "chat/ChatInterface";
 
 export const ChatMessages = () => {
   const messages = useMessagesContext();
+  const streams = useMessagesTokenContext();
   const messagesEndRef = useRef(null);
+  const chatStyle = useChatStyle();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  useEffect(scrollToBottom, [messages]);
+  useEffect(scrollToBottom, [messages, streams]);
 
   return (
-    <Box pt={5}>
+    <Box height={"100%"} {...chatStyle.messages}>
       {messages.map((messageGroup) => (
         <ChatMessage key={messageGroup.id} messageGroup={messageGroup} />
       ))}

@@ -1,66 +1,65 @@
 import React from "react";
-import {
-  Box,
-  Card,
-  CardBody,
-  Divider,
-  Heading,
-  Text,
-  useColorModeValue,
-  VStack,
-} from "@chakra-ui/react";
-import { useAgent } from "agents/graphql/AgentProvider";
+import { Box, Card, CardBody, HStack, Text, VStack } from "@chakra-ui/react";
 
-const AgentCard = () => {
-  const { agent } = useAgent();
+import AssistantAvatar from "chat/avatars/AssistantAvatar";
+import { useColorMode } from "@chakra-ui/color-mode";
 
+export const AgentCard = ({ agent, children, ...props }) => {
+  const { colorMode } = useColorMode();
   if (agent == null) {
     return null;
   }
 
-  const borderColor = useColorModeValue("gray.400", "whiteAlpha.50");
-  const bg = useColorModeValue("gray.100", "gray.700");
+  let sx = {
+    border: "1px solid transparent",
+    borderColor: colorMode === "light" ? "gray.300" : "transparent",
+  };
 
   return (
     <Card
       overflow="hidden"
-      boxShadow="md"
-      width="100%"
-      cursor="pointer"
-      border="1px solid"
-      borderColor={borderColor}
-      bg={bg}
+      boxShadow="sm"
+      width={360}
+      bg={colorMode === "light" ? "gray.200" : "blackAlpha.500"}
+      sx={sx}
+      {...props}
     >
-      <CardBody>
-        <VStack alignItems="start" spacing={2}>
-          <Heading as="h5" size="xs">
-            {agent.name}
-          </Heading>
-          <Text as="h5" size="xs">
-            {agent.model}
-          </Text>
-          <Divider />
-          <Heading as="h5" size="xs">
-            {agent.chain?.name || "No Chain"}
-          </Heading>
-          <Box
-            maxWidth="350px"
-            minHeight={50}
-            maxHeight={75}
-            overflow="hidden"
-            textOverflow="ellipsis"
-            css={{
-              display: "-webkit-box",
-              WebkitBoxOrient: "vertical",
-              WebkitLineClamp: 3,
-            }}
-          >
-            {agent.chain?.description || "No Chain"}
+      <CardBody px={5} pt={5} pb={2}>
+        <HStack spacing={3}>
+          <Box width={130}>
+            <VStack justify="center" align="center">
+              <AssistantAvatar agent={agent} />
+              <Text
+                color={colorMode === "light" ? "blue.500" : "blue.400"}
+                fontSize="sm"
+                fontWeight="bold"
+              >
+                @{agent.alias}
+              </Text>
+            </VStack>
           </Box>
-        </VStack>
+          <Box width={400} sx={{ userSelect: "none" }}>
+            <Text
+              maxWidth="350px"
+              minHeight={50}
+              maxHeight={75}
+              fontSize="sm"
+              overflow="hidden"
+              textOverflow="ellipsis"
+              css={{
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 3,
+              }}
+            >
+              {agent.purpose}
+            </Text>
+          </Box>
+        </HStack>
+        <HStack spacing={2} pt={4} display="flex" justifyContent="flex-end">
+          {children}
+        </HStack>
       </CardBody>
     </Card>
   );
 };
-
-export default AgentCard;

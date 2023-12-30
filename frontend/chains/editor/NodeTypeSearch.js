@@ -1,15 +1,37 @@
-import { usePreloadedQuery, useQueryLoader } from "react-relay/hooks";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { NodeSelector } from "chains/editor/NodeSelector";
+import React, {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { getOptionStyle, NodeSelector } from "chains/editor/NodeSelector";
 import { useDebounce } from "utils/hooks/useDebounce";
-import { Box, Heading, HStack, Input, Text, VStack } from "@chakra-ui/react";
-import { SearchNodeTypesQuery } from "chains/graphql/SearchNodeTypesQuery";
-import { useSideBarColorMode } from "chains/editor/useColorMode";
+import {
+  Badge,
+  Box,
+  HStack,
+  Input,
+  InputGroup,
+  InputRightElement,
+  Spinner,
+  Text,
+  VStack,
+} from "@chakra-ui/react";
+import {
+  useEditorColorMode,
+  useSideBarColorMode,
+} from "chains/editor/useColorMode";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { DEFAULT_NODE_STYLE, NODE_STYLES } from "chains/editor/styles";
+import { usePaginatedAPI } from "utils/hooks/usePaginatedAPI";
+import { SelectedNodeContext } from "chains/editor/contexts";
+import { faXmark } from "@fortawesome/free-solid-svg-icons";
+import { ComponentTypeMultiSelect } from "chains/editor/ComponentTypeMultiSelect";
 
 const NodeSelectorHeader = ({ label, icon }) => {
-  const { color } = useSideBarColorMode();
+  const { color, isLight } = useSideBarColorMode();
+  const style = getOptionStyle(isLight);
 
   return (
     <HStack
@@ -20,20 +42,12 @@ const NodeSelectorHeader = ({ label, icon }) => {
       borderColor="gray.600"
       px={2}
       pt={1}
+      {...style.label}
     >
       <FontAwesomeIcon icon={icon} />
       <Text>{label}</Text>
     </HStack>
   );
-};
-
-const SearchNodeTypesQueryRunner = ({ queryRef, setResults }) => {
-  // load query and then update state
-  const data = usePreloadedQuery(SearchNodeTypesQuery, queryRef);
-  const nodeTypes = data?.searchNodeTypes;
-  useEffect(() => {
-    setResults(nodeTypes);
-  }, [queryRef, nodeTypes]);
 };
 
 const SCROLLBAR_CSS = {
@@ -103,7 +117,7 @@ const NodeTypeGroup = ({ typeKey, group }) => {
   const typeStyle = NODE_STYLES[typeKey] || DEFAULT_NODE_STYLE;
 
   return (
-    <Box width="95%">
+    <Box mx={2} px={2} width={"100%"}>
       <NodeSelectorHeader label={typeKey} icon={typeStyle.icon} />
       {group?.map((type) => {
         return <NodeSelector key={type.id} type={type} />;
@@ -112,82 +126,135 @@ const NodeTypeGroup = ({ typeKey, group }) => {
   );
 };
 
+const NodeTypeSearchBadge = ({ type, onRemove }) => {
+  const { highlight } = useEditorColorMode();
+  const onRemoveClick = useCallback(() => {
+    onRemove(type);
+  }, [type]);
+  return (
+    <Badge key={type} px={2} mr={1} bg={highlight[type]}>
+      <Text
+        as={"span"}
+        color={"blackAlpha.500"}
+        style={{ cursor: "pointer" }}
+        onClick={onRemoveClick}
+      >
+        <FontAwesomeIcon icon={faXmark} size={"sm"} />
+      </Text>{" "}
+      {type}
+    </Badge>
+  );
+};
+
 /**
  * Provides a search widget including a search bar and a list of components.
  * Searching queries SearchNodeTypeQuery
  */
-export const NodeTypeSearch = () => {
-  const [results, setResults] = useState([]);
+export const NodeTypeSearch = ({ initialFocusRef }) => {
   const { border } = useSideBarColorMode();
+  const { input: inputStyle, scrollbar } = useEditorColorMode();
+  const { selectedConnector } = useContext(SelectedNodeContext);
+  const [query, setQuery] = useState({ search: "", types: [] });
 
-  // queries
-  const [nodeTypesQueryRef, loadNodeTypesQuery, disposeNodeTypesQuery] =
-    useQueryLoader(SearchNodeTypesQuery);
-  const { callback: searchNodeTypes, clear } = useDebounce(
-    useCallback((search) => {
-      loadNodeTypesQuery({ search }, { fetchPolicy: "store-and-network" });
-    }, []),
-    500
-  );
-
-  const onSearchChange = useCallback((event) => {
-    const search = event.target.value;
-    if (search) {
-      searchNodeTypes(search);
-    } else {
-      clear();
-      if (nodeTypesQueryRef) {
-        disposeNodeTypesQuery();
-      }
-      if (results) {
-        setResults([]);
-      }
+  // component query
+  const { load, page, clearPage, isLoading } = usePaginatedAPI(
+    `/api/node_types/`,
+    {
+      load: false,
+      limit: 50,
     }
+  );
+  const { callback: debouncedLoad, clear: clearLoad } = useDebounce(load, 400);
+
+  // trigger query when query state changes
+  useEffect(() => {
+    if (query.search || query.types.length > 0) {
+      if (selectedConnector && query.search === "") {
+        // load immediately if there is a selected connector
+        // since it indicates the user is not typing
+        load(query);
+      } else {
+        // typing should always be debounced even
+        // if there is a selected connector
+        debouncedLoad(query);
+      }
+    } else {
+      clearLoad();
+      clearPage();
+    }
+  }, [query]);
+
+  // auto-trigger state change when connector is [de]selected
+  useEffect(() => {
+    if (selectedConnector) {
+      const { connector } = selectedConnector;
+      const types = Array.isArray(connector.source_type)
+        ? connector.source_type
+        : [connector?.source_type];
+      setQuery((prev) => ({ search: "", types }));
+    } else {
+      // clear query
+      setQuery((prev) => ({ search: "", types: [] }));
+    }
+  }, [selectedConnector]);
+
+  // callback for search bar changing
+  const onSearchChange = useCallback((event) => {
+    setQuery((prev) => ({ ...prev, search: event.target.value }));
   }, []);
 
-  // Couldn't determine a good pattern for using relay to fetch
-  // search updates for the autocomplete. The results are needed
-  // here to decide whether to render the popover or not.
-  //
-  // QueryRunner components render empty but will fetch the query
-  // data then update the results state. This is a huge hack but
-  // it works for now.
-  const nodeTypeSearchRunner = nodeTypesQueryRef !== null && (
-    <SearchNodeTypesQueryRunner
-      queryRef={nodeTypesQueryRef}
-      setResults={setResults}
-    />
+  const handleTypeChange = useCallback(
+    (types) => {
+      setQuery((prev) => ({ ...prev, types }));
+    },
+    [setQuery]
   );
 
   const groupedTypes = useMemo(() => {
-    return groupByNodeTypeGroup(results || []);
-  }, [results]);
+    return groupByNodeTypeGroup(page?.objects || []);
+  }, [page]);
 
   return (
     <Box
-      mt={5}
-      pt={5}
+      mt={2}
+      pt={0}
       width="100%"
-      maxHeight={"60vh"}
       minWidth={170}
       overflowY={"hidden"}
+      overflowX={"hidden"}
+      maxHeight={"calc(100vh - 250px)"}
     >
-      {nodeTypeSearchRunner}
-      <Heading as="h3" size="xs" mb={2}>
-        Components
-      </Heading>
-      <Input
-        onChange={onSearchChange}
-        placeholder="search components"
-        mb={2}
-        borderColor={border}
-      />
+      <Box px={3} pb={1}>
+        <ComponentTypeMultiSelect
+          value={query.types}
+          onChange={handleTypeChange}
+        />
+      </Box>
+      <Box px={2}>
+        <InputGroup>
+          <Input
+            onChange={onSearchChange}
+            placeholder="search components"
+            mt={2}
+            mb={2}
+            mx={1}
+            borderColor={border}
+            value={query.search}
+            {...inputStyle}
+            ref={initialFocusRef}
+          />
+          <InputRightElement>
+            {isLoading && <Spinner size={"sm"} />}
+          </InputRightElement>
+        </InputGroup>
+      </Box>
       <VStack
-        overflowY="scroll"
-        css={SCROLLBAR_CSS}
-        maxHeight={"60vh"}
+        overflowY="auto"
+        css={scrollbar}
+        maxHeight={"calc(100vh - 170px)"}
         spacing={2}
         width="100%"
+        overflowX={"hidden"}
       >
         {groupedTypes?.map(([key, group]) => {
           return <NodeTypeGroup key={key} typeKey={key} group={group} />;

@@ -1,6 +1,7 @@
 from ix.server.settings import *  # noqa:F403
 import logging
 
+TESTING = True
 
 LOGGING = LOGGING.copy()  # noqa:F405
 LOGGING["loggers"] = {
@@ -16,3 +17,6 @@ CELERY_TASK_ALWAYS_EAGER = True
 INSTALLED_APPS += [  # noqa:F405
     "ix.pg_vector.tests.pg_vector_test",
 ]
+
+
+VAULT_BASE_PATH = "test"

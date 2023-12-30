@@ -13,6 +13,8 @@ import logging
 import os
 from pathlib import Path
 
+TRUTHY_VALUES = ["true", "1", "yes", "y", "on"]
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -25,6 +27,9 @@ SECRET_KEY = os.environ["DJANGO_SECRET_KEY"]
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
+TESTING = False
+
+DOCKER_HOST_IP = "172.17.42.1"
 
 ALLOWED_HOSTS = [
     "localhost",
@@ -34,7 +39,6 @@ ALLOWED_HOSTS = [
 
 
 # Application definition
-
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -45,10 +49,14 @@ INSTALLED_APPS = [
     "graphene_django",
     "channels",
     "django_extensions",
+    "ix.ix_users",
     "ix.task_log",
     "ix.chains",
     "ix.agents",
     "ix.chat",
+    "ix.datasources",
+    "ix.secrets",
+    "ix.runnable_log",
 ]
 
 MIDDLEWARE = [
@@ -85,17 +93,24 @@ WSGI_APPLICATION = "ix.server.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
+DATABASE_HOST = os.environ.get("DATABASE_HOST", default="db")
+DATABASE_PORT = os.environ.get("DATABASE_PORT", default=5432)
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": "ix",
         "USER": "ix",
         "PASSWORD": "ix",
-        "HOST": "db",
-        "PORT": "5432",
+        "HOST": DATABASE_HOST,
+        "PORT": DATABASE_PORT,
     }
 }
 
+
+AUTH_USER_MODEL = "ix_users.User"
+
+# filter objects by ownership, disable for local deployments
+OWNER_FILTERING = os.environ.get("OWNER_FILTERING", "0") == "1"
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
@@ -151,23 +166,36 @@ GRAPHENE = {"SCHEMA": "ix.schema.schema"}
 
 ASGI_APPLICATION = "ix.server.asgi.application"
 
+REDIS_HOST = os.environ.get("REDIS_HOST", default="redis")
+REDIS_PORT = os.environ.get("REDIS_PORT", default=6379)
+REDIS_DB = os.environ.get("REDIS_DB", default=0)
+REDIS = {
+    "host": REDIS_HOST,
+    "port": REDIS_PORT,
+    "db": REDIS_DB,
+}
+
+REDIS_DB_CHANNEL_LAYERS = os.environ.get("REDIS_DB_CHANNEL_LAYERS", default=0)
+REDIS_DB_CELERY = os.environ.get("REDIS_DB_CELERY", default=2)
+REDIS_DB_CACHES = os.environ.get("REDIS_DB_CACHES", default=1)
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [("redis", 6379)],
+            "hosts": [(REDIS_HOST, REDIS_PORT)],
         },
     },
 }
 
 # Celery configuration
-CELERY_BROKER_URL = "redis://redis:6379/2"
-CELERY_RESULT_BACKEND = "redis://redis:6379/2"
+CELERY_BROKER_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_CELERY}"
+CELERY_RESULT_BACKEND = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_CELERY}"
 
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": "redis://redis:6379/1",
+        "LOCATION": f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB_CACHES}",
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         },
@@ -207,3 +235,31 @@ LOGGING = {
 }
 
 MOCK_CHAT_RESPONSE = os.environ.get("MOCK_CHAT_RESPONSE", False)
+
+# Default agents to include in chats
+DEFAULT_AGENTS = [
+    "5003e280-cbd7-4029-a152-1cee12411d27",  # @code
+    "cc054ff5-67cd-4489-b0f1-b8b62af2d825",  # @readme
+]
+
+
+# Dev environment can load from .vault.env
+# TODO: move this to dev_settings if possible.
+if os.path.exists("/var/app/.vault.env"):
+    with open("/var/app/.vault.env", "r") as f:
+        key_file = f.read()
+        key, value = key_file.strip().split("=")
+        os.environ["VAULT_ROOT_KEY"] = value
+
+VAULT_DEV_ROOT_TOKEN_ID = os.environ.get("VAULT_DEV_ROOT_TOKEN_ID", "myroot")
+VAULT_ROOT_KEY = os.environ.get("VAULT_ROOT_TOKEN", VAULT_DEV_ROOT_TOKEN_ID)
+VAULT_SERVER = os.environ.get("VAULT_SERVER", "https://vault:8200")
+VAULT_TOKEN__USER_TOKENS = VAULT_ROOT_KEY
+VAULT_CLIENT_CRT = "/var/vault/certs/client.crt"
+VAULT_CLIENT_KEY = "/var/vault/certs/client.key"
+VAULT_TLS_VERIFY = False
+VAULT_BASE_PATH = os.environ.get("VAULT_BASE_PATH", "ix")
+
+WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "/var/app/workdir/")
+
+RUNNABLE_LOG_ENABLED = os.environ.get("RUNNABLE_LOG_ENABLED", "1") in TRUTHY_VALUES

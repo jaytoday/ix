@@ -1,133 +1,90 @@
+from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from ix.api.chains.types import NodeTypeField
-from ix.api.chains.types import NodeType as NodeTypePydantic
+from ix.api.components.types import NodeType as NodeTypePydantic
+from ix.chains.fixture_src.agent_interaction import AGENT_INTERACTION_CHAINS
 
 from ix.chains.fixture_src.agents import AGENTS
-from ix.chains.fixture_src.artifacts import ARTIFACT_MEMORY, SAVE_ARTIFACT
+from ix.chains.fixture_src.artifacts import ARTIFACTS
 from ix.chains.fixture_src.chains import CHAINS
-from ix.chains.fixture_src.chat_memory_backend import (
-    FILESYSTEM_MEMORY_BACKEND,
-    REDIS_MEMORY_BACKEND,
-)
-from ix.chains.fixture_src.embeddings import (
-    OPENAI_EMBEDDINGS,
-    GOOGLE_PALM_EMBEDDINGS,
-    LLAMA_CPP_EMBEDDINGS,
-    VERTEXAI_EMBEDDINGS,
-    HUGGINGFACE_EMBEDDINGS,
-    MOSAICML_INSTRUCTOR_EMBEDDINGS,
-)
+from ix.chains.fixture_src.dalle import DALLE
+from ix.chains.fixture_src.chat_memory_backend import MEMORY_BACKEND
+from ix.chains.fixture_src.document_loaders import DOCUMENT_LOADERS
+from ix.chains.fixture_src.embeddings import EMBEDDINGS
+from ix.chains.fixture_src.flow import FLOW
 from ix.chains.fixture_src.ix import CHAT_MODERATOR_TYPE
-from ix.chains.fixture_src.llm import OPENAI_LLM, GOOGLE_PALM, ANTHROPIC_LLM
-from ix.chains.fixture_src.memory import (
-    CONVERSATION_BUFFER_MEMORY,
-    CONVERSATION_SUMMARY_BUFFER_MEMORY,
-    CONVERSATION_BUFFER_WINDOW_MEMORY,
-    CONVERSATION_TOKEN_BUFFER_MEMORY,
-)
-from ix.chains.fixture_src.openai_functions import (
-    FUNCTION_SCHEMA,
-    FUNCTION_OUTPUT_PARSER,
-    OPENAPI_CHAIN,
-)
-from ix.chains.fixture_src.prompts import CHAT_PROMPT_TEMPLATE
+from ix.chains.fixture_src.json import JSON
+from ix.chains.fixture_src.lcel import LANGCHAIN_RUNNABLES
+from ix.chains.fixture_src.llm import LLMS
+from ix.chains.fixture_src.memory import MEMORY
+from ix.chains.fixture_src.openai_functions import OPENAI_FUNCTIONS
+from ix.chains.fixture_src.parsers import PARSERS
+from ix.chains.fixture_src.prompts import PROMPTS
+from ix.chains.fixture_src.retriever import RETRIEVERS
 from ix.chains.fixture_src.routing import ROUTING_CHAINS
 from ix.chains.fixture_src.testing import MOCK_MEMORY, MOCK_CHAIN
+from ix.chains.fixture_src.text_splitter import TEXT_SPLITTERS
+from ix.chains.fixture_src.toolkit import TOOLKITS
 from ix.chains.fixture_src.tools import TOOLS
-from ix.chains.fixture_src.vectorstores import REDIS_VECTORSTORE
+from ix.chains.fixture_src.vectorstores import VECTORSTORES
 from ix.chains.models import NodeType
+from ix.chains.tests.mock_runnable import MOCK_RUNNABLE_CONFIG
+from ix.secrets.models import SecretType
 
 COMPONENTS = []
 
 # Embeddings
-COMPONENTS.extend(
-    [
-        OPENAI_EMBEDDINGS,
-        GOOGLE_PALM_EMBEDDINGS,
-        LLAMA_CPP_EMBEDDINGS,
-        VERTEXAI_EMBEDDINGS,
-        HUGGINGFACE_EMBEDDINGS,
-        MOSAICML_INSTRUCTOR_EMBEDDINGS,
-    ]
-)
+COMPONENTS.extend(EMBEDDINGS)
 
 # Agents
 COMPONENTS.extend(AGENTS)
 COMPONENTS.extend(TOOLS)
+COMPONENTS.extend(TOOLKITS)
 
 # LLMS
-COMPONENTS.extend(
-    [
-        OPENAI_LLM,
-        GOOGLE_PALM,
-        ANTHROPIC_LLM,
-    ]
-)
+COMPONENTS.extend(LLMS)
+COMPONENTS.extend(DALLE)
+COMPONENTS.extend(PROMPTS)
 
 # Chains
 COMPONENTS.extend(CHAINS)
 COMPONENTS.extend(ROUTING_CHAINS)
 
 # OpenAI Functions
-COMPONENTS.extend(
-    [
-        FUNCTION_SCHEMA,
-        FUNCTION_OUTPUT_PARSER,
-        OPENAPI_CHAIN,
-    ]
-)
-
-# Prompts
-COMPONENTS.extend(
-    [
-        CHAT_PROMPT_TEMPLATE,
-    ]
-)
+COMPONENTS.extend(OPENAI_FUNCTIONS)
 
 # Memory
-COMPONENTS.extend(
-    [
-        CONVERSATION_BUFFER_MEMORY,
-        CONVERSATION_BUFFER_WINDOW_MEMORY,
-        CONVERSATION_SUMMARY_BUFFER_MEMORY,
-        CONVERSATION_TOKEN_BUFFER_MEMORY,
-    ]
-)
+COMPONENTS.extend(MEMORY)
+COMPONENTS.extend(MEMORY_BACKEND)
 
-# Memory Backends
-COMPONENTS.extend(
-    [
-        REDIS_MEMORY_BACKEND,
-        FILESYSTEM_MEMORY_BACKEND,
-    ]
-)
+# Document retrieval
+COMPONENTS.extend(PARSERS)
+COMPONENTS.extend(TEXT_SPLITTERS)
+COMPONENTS.extend(DOCUMENT_LOADERS)
+COMPONENTS.extend(VECTORSTORES)
+COMPONENTS.extend(RETRIEVERS)
 
-# Vectorstores
-COMPONENTS.extend(
-    [
-        REDIS_VECTORSTORE,
-    ]
-)
+# IX integrations & flow
+COMPONENTS.extend(LANGCHAIN_RUNNABLES)
+COMPONENTS.extend(JSON)
+COMPONENTS.extend(FLOW)
 
 # IX Misc
 COMPONENTS.extend([CHAT_MODERATOR_TYPE])
+COMPONENTS.extend(AGENT_INTERACTION_CHAINS)
 
 # IX Artifacts
-COMPONENTS.extend(
-    [
-        ARTIFACT_MEMORY,
-        SAVE_ARTIFACT,
-    ]
-)
+COMPONENTS.extend(ARTIFACTS)
 
 # Testing
-COMPONENTS.extend(
-    [
-        MOCK_MEMORY,
-        MOCK_CHAIN,
-    ]
-)
+if settings.TESTING:
+    COMPONENTS.extend(
+        [
+            MOCK_MEMORY,
+            MOCK_CHAIN,
+            MOCK_RUNNABLE_CONFIG,
+        ]
+    )
 
 
 class Command(BaseCommand):
@@ -145,22 +102,46 @@ class Command(BaseCommand):
 
     help = "Imports LangChain components from python fixtures."
 
+    def to_stdout(self, msg):
+        if not settings.TESTING:
+            self.stdout.write(msg)
+
     def handle(self, *args, **options):
         for component in COMPONENTS:
-            class_path = component.get("class_path")
+            # validate by converting to pydantic model instance
+            # TODO: COMPONENTS should be converted to pydantic models but for now
+            #       expect that they are dicts and validated here.
+            if isinstance(component, dict):
+                node_type_pydantic = NodeTypePydantic(**component)
+            else:
+                node_type_pydantic = component
+            config_schema = node_type_pydantic.get_config_schema()
+            validated_options = node_type_pydantic.model_dump(
+                exclude={"id", "display_groups", "config_schema"}
+            )
+
+            class_path = node_type_pydantic.class_path
             if NodeType.objects.filter(class_path=class_path).exists():
                 # updating existing node type
-                print(f"Updating component: {component['class_path']}")
+                self.to_stdout(f"Updating component: {class_path}")
                 node_type = NodeType.objects.get(class_path=class_path)
-                for key, value in component.items():
+                for key, value in validated_options.items():
                     if key == "class_path":
                         continue
                     setattr(node_type, key, value)
+                node_type.config_schema = config_schema
                 node_type.save()
             else:
                 # creating new node type
-                node_type = NodeType.objects.create(**component)
+                NodeType.objects.create(
+                    config_schema=config_schema, **validated_options
+                )
 
-            fields = [NodeTypeField(**field) for field in node_type.fields or []]
-            node_type.config_schema = NodeTypePydantic.generate_config_schema(fields)
-            node_type.save(update_fields=["config_schema"])
+            # Secrets - generate SecretTypes from secret fields
+            for secret_group in node_type_pydantic.secret_groups:
+                try:
+                    secret_type = SecretType.objects.get(name=secret_group.key)
+                except SecretType.DoesNotExist:
+                    secret_type = SecretType(name=secret_group.key)
+                secret_type.fields_schema = secret_group.fields_schema
+                secret_type.save()

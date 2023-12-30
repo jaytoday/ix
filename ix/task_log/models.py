@@ -1,23 +1,31 @@
 import json
 import uuid
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, List
 
-from django.contrib.auth.models import User
+from django.contrib.auth import get_user_model
 from django.db import models
 from ix.agents.models import Agent
 from ix.chains.models import Chain
 from ix.commands.filesystem import read_file
+from ix.ix_users.models import OwnedModel
 
 
 class Task(models.Model):
     """An instance of an agent running."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    root = models.ForeignKey(
+        "self",
+        related_name="descendants",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+    )
     parent = models.ForeignKey(
         "self", related_name="children", null=True, blank=True, on_delete=models.CASCADE
     )
     name = models.CharField(max_length=64)
-    user = models.ForeignKey("auth.User", on_delete=models.CASCADE)
+    user = models.ForeignKey("ix_users.User", on_delete=models.CASCADE)
     agent = models.ForeignKey(Agent, null=True, on_delete=models.CASCADE)
     chain = models.ForeignKey(Chain, on_delete=models.CASCADE)
     is_complete = models.BooleanField(default=False)
@@ -35,6 +43,7 @@ class Task(models.Model):
         Create a subtask in which a delegated task will run.
         """
         return Task.objects.create(
+            root_id=self.root_id or self.id,
             parent=self,
             name=f"delegating to agent {agent.alias}",
             agent_id=agent.id,
@@ -47,9 +56,11 @@ class Task(models.Model):
         """
         Create a subtask in which a delegated task will run.
         """
+        user_model = get_user_model()
         chain = await Chain.objects.aget(id=agent.chain_id)
-        user = await User.objects.aget(id=self.user_id)
+        user = await user_model.objects.aget(id=self.user_id)
         return await Task.objects.acreate(
+            root_id=self.root_id or self.id,
             parent=self,
             name=f"delegating to agent {agent.alias}",
             agent_id=agent.id,
@@ -62,6 +73,7 @@ class Task(models.Model):
 class UserFeedback(TypedDict):
     type: str
     feedback: Optional[str]
+    artifact_ids: List[str | uuid.UUID]
     message_id: Optional[str]
 
 
@@ -72,9 +84,9 @@ class TaskLogMessage(models.Model):
     """
 
     ROLE_CHOICES = [
-        ("system", "system"),
-        ("assistant", "assistant"),
-        ("user", "user"),
+        ("SYSTEM", "SYSTEM"),
+        ("ASSISTANT", "ASSISTANT"),
+        ("USER", "USER"),
     ]
 
     TYPE_CHOICES = [
@@ -138,7 +150,7 @@ class TaskLogMessage(models.Model):
         }
 
 
-class Artifact(models.Model):
+class Artifact(OwnedModel):
     """
     Artifacts represent an object or data created by an Agent. Artifacts are bits of information
     that are either a user deliverable or an input to a further step.

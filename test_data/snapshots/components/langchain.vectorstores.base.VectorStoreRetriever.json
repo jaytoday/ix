@@ -1,0 +1,82 @@
+{
+    "child_field": null,
+    "class_path": "langchain.vectorstores.base.VectorStoreRetriever",
+    "config_schema": {
+        "display_groups": null,
+        "properties": {
+            "allowed_search_types": {
+                "items": [
+                    {
+                        "type": "string"
+                    }
+                ],
+                "maxItems": null,
+                "minItems": null,
+                "type": "array",
+                "uniqueItems": false
+            },
+            "search_type": {
+                "default": "similarity",
+                "type": "string"
+            }
+        },
+        "required": [
+            "allowed_search_types"
+        ],
+        "type": "object"
+    },
+    "connectors": [
+        {
+            "as_type": null,
+            "auto_sequence": true,
+            "key": "vectorstore",
+            "multiple": false,
+            "required": true,
+            "source_type": "vectorstore",
+            "template": false,
+            "type": "target"
+        }
+    ],
+    "description": "Default vector",
+    "display_type": "node",
+    "fields": [
+        {
+            "choices": null,
+            "default": [
+                "similarity",
+                "similarity_score_threshold",
+                "mmr"
+            ],
+            "description": null,
+            "input_type": null,
+            "label": "",
+            "max": null,
+            "min": null,
+            "name": "allowed_search_types",
+            "parent": null,
+            "required": true,
+            "secret_key": null,
+            "step": null,
+            "style": null,
+            "type": "list"
+        },
+        {
+            "choices": null,
+            "default": "similarity",
+            "description": null,
+            "input_type": null,
+            "label": "Search_type",
+            "max": null,
+            "min": null,
+            "name": "search_type",
+            "parent": null,
+            "required": false,
+            "secret_key": null,
+            "step": null,
+            "style": null,
+            "type": "str"
+        }
+    ],
+    "name": "VectorStoreRetriever",
+    "type": "retriever"
+}

@@ -1,7 +1,19 @@
+from langchain.embeddings import (
+    HuggingFaceInstructEmbeddings,
+    HuggingFaceEmbeddings,
+    HuggingFaceInferenceAPIEmbeddings,
+    HuggingFaceBgeEmbeddings,
+    HuggingFaceHubEmbeddings,
+)
+
+from ix.api.components.types import NodeTypeField
+from ix.chains.fixture_src.llm import GOOGLE_API_KEY
+
+OPENAI_EMBEDDINGS_CLASS_PATH = "langchain.embeddings.openai.OpenAIEmbeddings"
 OPENAI_EMBEDDINGS = {
     "name": "OpenAI Embeddings",
     "description": "Embeddings from OpenAI's API.",
-    "class_path": "langchain.embeddings.openai.OpenAIEmbeddings",
+    "class_path": OPENAI_EMBEDDINGS_CLASS_PATH,
     "type": "embeddings",
     "fields": [
         {
@@ -9,9 +21,33 @@ OPENAI_EMBEDDINGS = {
             "type": "string",
             "default": "text-embedding-ada-002",
             "choices": [
-                {"name": "text-embedding-ada-002", "label": "text-embedding-ada-002"},
+                {"value": "text-embedding-ada-002", "label": "text-embedding-ada-002"},
             ],
-        }
+            "input_type": "select",
+        },
+        {
+            "name": "allowed_special",
+            "type": "list",
+        },
+        {
+            "name": "disallowed_special",
+            "type": "list",
+            "default": [],
+        },
+        {
+            "name": "chunk_size",
+            "type": "int",
+            "default": 1000,
+        },
+        {
+            "name": "max_retries",
+            "type": "int",
+            "default": "6",
+            "min": 0,
+            "max": 6,
+            "step": 1,
+            "input_type": "slider",
+        },
     ],
 }
 
@@ -24,7 +60,7 @@ GOOGLE_PALM_EMBEDDINGS = {
         {
             "name": "google_api_key",
             "type": "string",
-            "description": "Google API key",
+            "description": "Google PaLM key",
         },
         {
             "name": "model_name",
@@ -38,6 +74,20 @@ GOOGLE_PALM_EMBEDDINGS = {
                     "value": "models/embedding-gecko-001",
                 },
             ],
+        },
+    ],
+}
+GOOGLE_GEN_AI_EMBEDDINGS = {
+    "class_path": "langchain_google_genai.GoogleGenerativeAIEmbeddings",
+    "type": "embeddings",
+    "name": "Google Gen AI Embeddings",
+    "description": "Google Gen AI Embeddings",
+    "fields": [
+        GOOGLE_API_KEY,
+        {
+            "name": "model",
+            "type": "string",
+            "description": "The name of the embedding model to use. ",
         },
     ],
 }
@@ -125,7 +175,7 @@ VERTEXAI_EMBEDDINGS = {
             "name": "model_name",
             "label": "Model",
             "type": "string",
-            "input": "select",
+            "input_type": "select",
             "default": "textembedding-gecko",
             "description": "Model name to use",
             "choices": [
@@ -135,43 +185,106 @@ VERTEXAI_EMBEDDINGS = {
     ],
 }
 
+HUGGINGFACE_EMBEDDINGS_CLASS_PATH = (
+    "langchain.embeddings.huggingface.HuggingFaceEmbeddings"
+)
 HUGGINGFACE_EMBEDDINGS = {
-    "class_path": "langchain.embeddings.huggingface.HuggingFaceEmbeddings",
+    "class_path": HUGGINGFACE_EMBEDDINGS_CLASS_PATH,
     "type": "embeddings",
     "name": "HuggingFace Embeddings",
     "description": "HuggingFace Embeddings",
-    "fields": [
-        {
-            "name": "model_name",
-            "label": "Model",
-            "type": "string",
-            "default": "sentence-transformers/all-mpnet-base-v2",
-            "description": "Model name to use",
-            "choices": [
-                {
-                    "label": "all-mpnet-base-v2",
-                    "value": "sentence-transformers/all-mpnet-base-v2",
-                },
-            ],
-            "style": {"width": "100%"},
-        },
-        {
-            "name": "cache_folder",
-            "type": "string",
-            "description": "Path to store models",
-        },
-        {
-            "name": "model_kwargs",
-            "type": "dictionary",
-            "description": "Key word arguments to pass to the model",
-        },
-        {
-            "name": "encode_kwargs",
-            "type": "dictionary",
-            "description": "Key word arguments to pass when calling the `encode` method of the model",
-        },
-    ],
+    "fields": NodeTypeField.get_fields(
+        HuggingFaceEmbeddings,
+        include=[
+            "model_name",
+            "cache_folder",
+            "model_kwargs",
+            "encode_kwargs",
+            "multi_process",
+        ],
+    ),
 }
+
+HUGGINGFACE_INSTRUCT_EMBEDDINGS_CLASS_PATH = (
+    "langchain.embeddings.huggingface.HuggingFaceInstructEmbeddings"
+)
+HUGGINGFACE_INSTRUCT_EMBEDDINGS = {
+    "class_path": HUGGINGFACE_INSTRUCT_EMBEDDINGS_CLASS_PATH,
+    "type": "embeddings",
+    "name": "HuggingFace Instruct Embeddings",
+    "description": "HuggingFace Instruct Embeddings",
+    "fields": NodeTypeField.get_fields(
+        HuggingFaceInstructEmbeddings,
+        include=[
+            "model_name",
+            "cache_folder",
+            "encode_kwargs",
+            "embed_instruction",
+            "query_instruction",
+        ],
+    ),
+}
+
+HUGGINGFACE_BGE_EMBEDDINGS_CLASS_PATH = (
+    "langchain.embeddings.huggingface.HuggingFaceBgeEmbeddings"
+)
+HUGGINGFACE_BGE_EMBEDDINGS = {
+    "class_path": HUGGINGFACE_BGE_EMBEDDINGS_CLASS_PATH,
+    "type": "embeddings",
+    "name": "HuggingFace BGE Embeddings",
+    "description": "HuggingFace BGE Embeddings",
+    "fields": NodeTypeField.get_fields(
+        HuggingFaceBgeEmbeddings,
+        include=[
+            "model_name",
+            "cache_folder",
+            "model_kwargs",
+            "encode_kwargs",
+            "query_instruction",
+        ],
+    ),
+}
+
+
+HUGGINGFACE_INFERENCE_API_EMBEDDINGS_CLASS_PATH = (
+    "langchain.embeddings.huggingface.HuggingFaceInferenceAPIEmbeddings"
+)
+HUGGINGFACE_INFERENCE_API_EMBEDDINGS = {
+    "class_path": HUGGINGFACE_INFERENCE_API_EMBEDDINGS_CLASS_PATH,
+    "type": "embeddings",
+    "name": "HuggingFace Inference API Embeddings",
+    "description": "HuggingFace Inference API Embeddings",
+    "fields": NodeTypeField.get_fields(
+        HuggingFaceInferenceAPIEmbeddings,
+        include=["api_key", "model_name"],
+        field_options={
+            "api_key": {
+                "input_type": "secret",
+            }
+        },
+    ),
+}
+
+
+HUGGINGFACE_HUB_EMBEDDINGS_CLASS_PATH = (
+    "langchain.embeddings.huggingface_hub.HuggingFaceHubEmbeddings"
+)
+HUGGINGFACE_HUB_EMBEDDINGS = {
+    "class_path": HUGGINGFACE_HUB_EMBEDDINGS_CLASS_PATH,
+    "type": "embeddings",
+    "name": "HuggingFace Hub Embeddings",
+    "description": "HuggingFace Hub Embeddings",
+    "fields": NodeTypeField.get_fields(
+        HuggingFaceHubEmbeddings,
+        include=["repo_id", "huggingfacehub_api_token", "task", "model_kwargs"],
+        field_options={
+            "huggingfacehub_api_token": {
+                "input_type": "secret",
+            }
+        },
+    ),
+}
+
 
 MOSAICML_INSTRUCTOR_EMBEDDINGS = {
     "class_path": "langchain.embeddings.mosaicml.MosaicMLInstructorEmbeddings",
@@ -207,9 +320,23 @@ MOSAICML_INSTRUCTOR_EMBEDDINGS = {
         {
             "name": "mosaicml_api_token",
             "type": "string",
-            "input": "secret",
-            "description": "MosaicML API token",
+            "input_type": "secret",
+            "secret_key": "MosaicML API",
             "style": {"width": "100%"},
         },
     ],
 }
+
+EMBEDDINGS = [
+    OPENAI_EMBEDDINGS,
+    GOOGLE_GEN_AI_EMBEDDINGS,
+    GOOGLE_PALM_EMBEDDINGS,
+    LLAMA_CPP_EMBEDDINGS,
+    VERTEXAI_EMBEDDINGS,
+    HUGGINGFACE_EMBEDDINGS,
+    HUGGINGFACE_INSTRUCT_EMBEDDINGS,
+    HUGGINGFACE_BGE_EMBEDDINGS,
+    HUGGINGFACE_INFERENCE_API_EMBEDDINGS,
+    HUGGINGFACE_HUB_EMBEDDINGS,
+    MOSAICML_INSTRUCTOR_EMBEDDINGS,
+]

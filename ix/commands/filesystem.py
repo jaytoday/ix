@@ -4,9 +4,14 @@ import os
 import glob
 
 import aiofiles
-
+from asgiref.sync import sync_to_async
 
 WORKDIR = Path("/var/app/workdir")
+
+
+def get_work_dir() -> Path:
+    """Returns the path to the workdir."""
+    return WORKDIR
 
 
 def create_file_path(file_path):
@@ -26,6 +31,7 @@ def write_to_file(file_path: str, content: str) -> None:
 
 
 async def awrite_to_file(file_path, content):
+    await sync_to_async(create_file_path)(WORKDIR / file_path)
     async with aiofiles.open(WORKDIR / file_path, "w") as f:
         await f.write(content)
 

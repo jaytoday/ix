@@ -1,6 +1,6 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useContext } from "react";
 import { v4 as uuid4 } from "uuid";
-import { Box, Input, useToast } from "@chakra-ui/react";
+import { Box, IconButton, Input } from "@chakra-ui/react";
 import ReactFlow, {
   addEdge,
   updateEdge,
@@ -10,7 +10,6 @@ import ReactFlow, {
   useEdgesState,
 } from "reactflow";
 import ConfigNode from "chains/flow/ConfigNode";
-import { useChainEditorAPI } from "chains/hooks/useChainEditorAPI";
 import { useNavigate } from "react-router-dom";
 
 import "reactflow/dist/style.css";
@@ -23,46 +22,52 @@ import {
 } from "chains/hooks/useGraphForReactFlow";
 import { useColorMode } from "@chakra-ui/color-mode";
 import { RootNode } from "chains/flow/RootNode";
-import { getDefaults } from "chains/flow/TypeAutoFields";
+import { getDefaults } from "json_form/JSONSchemaForm";
 import { useDebounce } from "utils/hooks/useDebounce";
+import { useAxios } from "utils/hooks/useAxios";
+import {
+  ChainState,
+  NodeStateContext,
+  SelectedNodeContext,
+} from "chains/editor/contexts";
+import { useConnectionValidator } from "chains/hooks/useConnectionValidator";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faRightLeft } from "@fortawesome/free-solid-svg-icons";
+import { useChainUpdate } from "chains/hooks/useChainUpdate";
+import { useRightSidebarContext } from "site/sidebar/context";
+import { DirectRootNode } from "chains/flow/DirectRootNode";
 
 // Nodes are either a single node or a group of nodes
 // ConfigNode renders class_path specific content
 const nodeTypes = {
-  NODE: ConfigNode,
-  LIST: ConfigNode,
+  node: ConfigNode,
+  list: ConfigNode,
   root: RootNode,
+  direct_root: DirectRootNode,
+};
+
+const getExpectedTypes = (connector) => {
+  return Array.isArray(connector?.source_type)
+    ? new Set(connector.source_type)
+    : new Set([connector.source_type]);
 };
 
 const ChainGraphEditor = ({ graph }) => {
   const reactFlowWrapper = useRef(null);
   const edgeUpdate = useRef(true);
-  const [chainRef, setChainRef] = useState(graph?.chain);
-  const [chainLoaded, setChainLoaded] = useState(graph?.chain !== undefined);
+  const { call: loadChain } = useAxios();
+  const { chain, setChain } = useContext(ChainState);
 
   const reactFlowGraph = useGraphForReactFlow(graph);
   const [nodes, setNodes, onNodesChange] = useNodesState(reactFlowGraph.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(reactFlowGraph.edges);
   const [reactFlowInstance, setReactFlowInstance] = useState(null);
   const { colorMode } = useColorMode();
-  const toast = useToast();
   const navigate = useNavigate();
-
-  const onAPIError = useCallback((err) => {
-    toast({
-      title: "Error",
-      description: `Failed to save chain. ${err.message}`,
-      status: "error",
-      duration: 10000,
-      isClosable: true,
-    });
-  }, []);
-
-  const api = useChainEditorAPI({
-    chainRef,
-    onError: onAPIError,
-    reactFlowInstance,
-  });
+  const nodeState = useContext(NodeStateContext);
+  const api = useContext(ChainEditorAPIContext);
+  const { selectedNode, selectedConnector, setSelectedConnector } =
+    useContext(SelectedNodeContext);
 
   // handle dragging a node onto the graph
   const onDragOver = useCallback((event) => {
@@ -70,20 +75,25 @@ const ChainGraphEditor = ({ graph }) => {
     event.dataTransfer.dropEffect = "move";
   }, []);
 
+  // rebuild edges if colorMode toggles
+  React.useEffect(() => {
+    setEdges(reactFlowGraph.edges);
+  }, [colorMode]);
+
   const onNodeSaved = useCallback(
-    ({ addChainNode }) => {
+    (response) => {
       // first node creates the new chain
       // redirect to the correct URL
-      const { node } = addChainNode;
-      const chain_id = node?.chain?.id;
-
-      if (!chainLoaded) {
-        navigate(`/chains/${chain_id}`, { replace: true });
-        setChainLoaded(true);
-        setChainRef(node?.chain);
+      if (chain?.id === undefined) {
+        navigate(`/chains/${response.data.chain_id}`, { replace: true });
+        loadChain(`/api/chains/${response.data.chain_id}`, {
+          onSuccess: (response) => {
+            setChain(response.data);
+          },
+        });
       }
     },
-    [chainRef?.id, chainLoaded]
+    [chain?.id]
   );
 
   const onDrop = useCallback(
@@ -105,23 +115,91 @@ const ChainGraphEditor = ({ graph }) => {
         y: event.clientY - reactFlowBounds.top,
       });
 
+      const newNodeID = uuid4();
+
+      // auto edge connection. Prefer selected connector, then selected node
+      let edge = null;
+      let flowEdge = null;
+      let edgeConnector = null;
+      if (selectedNode || selectedConnector) {
+        // selectedConnector has all properties but fallback to selectedNode if it doesn't
+        const node = selectedConnector?.node || selectedNode?.data.node;
+        const selectedType = selectedConnector?.type || selectedNode?.data.type;
+
+        if (selectedConnector) {
+          edgeConnector = selectedConnector.connector;
+        } else {
+          // Only Node selected:
+          // select the first open connector accepting the node type
+          const targetType = selectedNode.data.type;
+          edgeConnector = targetType.connectors?.find((connector) =>
+            getExpectedTypes(connector).has(nodeType.type)
+          );
+        }
+
+        if (edgeConnector) {
+          // output connector is a source, flip the edge
+          const isOutput = edgeConnector.key === "out";
+          const key = isOutput ? "in" : edgeConnector.key;
+
+          // create flow edge to validate and add to ReactFlow
+          const edgeId = uuid4();
+          const flowNodeType = nodeType.type;
+          const style = getEdgeStyle(colorMode);
+          flowEdge = {
+            id: edgeId,
+            source: isOutput ? node.id : newNodeID,
+            target: isOutput ? newNodeID : node.id,
+            sourceHandle: key === "in" ? "out" : flowNodeType,
+            targetHandle: key,
+            data: { id: edgeId },
+            ...style[key === "in" || key === "out" ? "LINK" : "PROP"],
+          };
+
+          // validate flowEdge before creating datum for API
+          const sourceType =
+            flowEdge.source === newNodeID ? nodeType : selectedType;
+          const targetType =
+            flowEdge.target === newNodeID ? nodeType : selectedType;
+          if (isValidConnection({ ...flowEdge, sourceType, targetType })) {
+            edge = {
+              id: edgeId,
+              source_id: flowEdge.source,
+              target_id: flowEdge.target,
+              target_key: flowEdge.targetHandle,
+              source_key: flowEdge.sourceHandle,
+            };
+          }
+        }
+      }
+
       // create data object instead of waiting for graphql
       const data = {
-        id: uuid4(),
-        chainId: chainRef?.id || null,
-        classPath: nodeType.classPath,
+        id: newNodeID,
+        chain_id: chain?.id || null,
+        class_path: nodeType.class_path,
+        name: "",
+        description: "",
         position: position,
         config: getDefaults(nodeType),
       };
+      if (edge) {
+        data.edges = [edge];
+      }
+      nodeState.setNode(data);
 
       // create ReactFlow node
       const flowNode = toReactFlowNode(data, nodeType);
 
       // add to API and ReactFlow
-      api.addNode({ data }, { onCompleted: onNodeSaved });
+      api.addNode(data, { onSuccess: onNodeSaved });
       setNodes((nds) => nds.concat(flowNode));
+
+      if (edge) {
+        setEdges((els) => addEdge(flowEdge, els));
+      }
     },
-    [reactFlowInstance, chainRef?.id]
+    [reactFlowInstance, chain?.id, selectedNode, colorMode, selectedConnector]
   );
 
   const onFilteredNodesChange = useCallback(
@@ -136,13 +214,13 @@ const ChainGraphEditor = ({ graph }) => {
   );
 
   const onNodeDragStop = useCallback((event, node) => {
+    // ignore position updates for root
+    if (node.id === "root") {
+      return;
+    }
+
     // update node with new position
-    api.updateNodePosition({
-      data: {
-        id: node.id,
-        position: node.position,
-      },
-    });
+    api.updateNodePosition(node.id, node.position);
   }, []);
 
   // new edges
@@ -154,98 +232,46 @@ const ChainGraphEditor = ({ graph }) => {
       const flowNodeType =
         source.id === "root" ? "root" : source.data.type.type;
       const style = getEdgeStyle(colorMode, flowNodeType);
-      setEdges((els) => addEdge({ ...params, data: { id }, style }, els));
+
+      // normal LINK and PROP edges
+      const from_root =
+        source.id === "root" || source.data.type.class_path === "__ROOT__";
+      const is_out = params.sourceHandle === "out";
+      const is_in = params.targetHandle === "in";
+      const from_branch = source.data.type.type === "branch";
+      const displayRelation =
+        from_root || is_out || is_in || from_branch ? "LINK" : "PROP";
+      setEdges((els) =>
+        addEdge({ ...params, ...style[displayRelation], data: { id } }, els)
+      );
 
       // save via API
       if (source.id === "root") {
         // link from root node uses setRoot since it's not stored as an edge
-        api.setRoot({ chainId: chainRef.id, nodeId: params.target });
+        const root_node_ids = reactFlowInstance
+          .getEdges()
+          .filter((edge) => edge.source === "root")
+          .map((edge) => edge.target);
+        root_node_ids.push(params.target);
+        api.setRoots(chain.id, { node_ids: root_node_ids });
       } else {
-        // normal link and prop edges
+        const relation = from_root || is_out || from_branch ? "LINK" : "PROP";
         const data = {
           id,
-          sourceId: params.source,
-          targetId: params.target,
-          key: params.targetHandle,
-          chainId: chainRef?.id,
-          relation: params.sourceHandle === "out" ? "LINK" : "PROP",
+          source_id: params.source,
+          target_id: params.target,
+          source_key: params.sourceHandle,
+          target_key: params.targetHandle,
+          chain_id: chain?.id,
+          relation,
         };
-        api.addEdge({ data });
+        api.addEdge(data);
       }
     },
-    [chainRef, reactFlowInstance, colorMode]
+    [chain, reactFlowInstance, colorMode]
   );
 
-  const isValidConnection = useCallback(
-    // Connections are allowed when the source and target types match
-    // and the target has an open connector slot. Targets may optionally
-    // support multiple connections.
-
-    (connection) => {
-      // target
-      const target = reactFlowInstance.getNode(connection.target);
-      const connectors = target.data.type.connectors;
-      let connector, expectedType;
-      if (connection.targetHandle === "in") {
-        expectedType = "chain-link";
-      } else {
-        connector = connectors.find((c) => c.key === connection.targetHandle);
-        expectedType = connector?.sourceType;
-      }
-      const supportsMultiple = connector?.multiple || false;
-
-      // source
-      const source = reactFlowInstance.getNode(connection.source);
-      const providedType =
-        connection.sourceHandle === "out"
-          ? "chain-link"
-          : source.data.type.type;
-
-      // connection types must match
-      // HAX: adding a special case for chain-agent connections until expectedType can be
-      //      expanded to be a set of types
-      if (
-        expectedType === providedType ||
-        (expectedType === "chain" && providedType === "agent")
-      ) {
-        const instanceEdges = reactFlowInstance.getEdges();
-        const targetEdges = instanceEdges.filter(
-          (e) =>
-            e.target === target.id && e.targetHandle === connection.targetHandle
-        );
-        const sourceEdges = instanceEdges.filter(
-          (e) =>
-            e.source === source.id && e.sourceHandle === connection.sourceHandle
-        );
-        const sourceConnected = sourceEdges.length > 0;
-        const targetConnected = targetEdges.length > 0;
-
-        if (edgeUpdate.edge) {
-          // valid when updating an edge:
-          // - if connecting to the same target/source
-          // - if connecting to an unconnected target/source
-          // - if target supports multiple connections
-          const currentSource = edgeUpdate.edge.source;
-          const currentTarget = edgeUpdate.edge.target;
-          const isSameSource = connection.source === currentSource;
-          const isSameTarget = connection.target === currentTarget;
-
-          return (
-            (isSameSource || !sourceConnected) &&
-            (isSameTarget || !targetConnected || supportsMultiple)
-          );
-        } else {
-          // valid when creating a new edge
-          // - if connecting to an unconnected target/source
-          // - if target supports multiple connections
-          return !sourceConnected && (!targetConnected || supportsMultiple);
-        }
-      }
-
-      return false;
-    },
-    [reactFlowInstance]
-  );
+  const { isValidConnection } = useConnectionValidator(edgeUpdate);
 
   const onEdgeUpdateStart = useCallback(
     (event, edge) => {
@@ -263,24 +289,26 @@ const ChainGraphEditor = ({ graph }) => {
       setEdges((els) => updateEdge(oldEdge, newConnection, els));
       if (newConnection.source === "root") {
         if (oldEdge.target !== newConnection.target) {
-          api.setRoot({ chainId: chainRef.id, nodeId: newConnection.target });
+          const root_node_ids = reactFlowInstance
+            .getEdges()
+            .filter((edge) => edge.source === "root" && edge.id !== oldEdge.id)
+            .map((edge) => edge.target);
+          root_node_ids.push(newConnection.target);
+          api.setRoots(chain.id, { node_ids: root_node_ids });
         }
       } else {
         const isSame =
           oldEdge.source === newConnection.source &&
           oldEdge.target === newConnection.target;
         if (!isSame) {
-          api.updateEdge({
-            data: {
-              id: oldEdge.data.id,
-              sourceId: newConnection.source,
-              targetId: newConnection.target,
-            },
+          api.updateEdge(oldEdge.data.id, {
+            source_id: newConnection.source,
+            target_id: newConnection.target,
           });
         }
       }
     },
-    [chainRef?.id, setEdges]
+    [chain?.id, setEdges, reactFlowInstance]
   );
 
   const onEdgeUpdateEnd = useCallback(
@@ -289,87 +317,119 @@ const ChainGraphEditor = ({ graph }) => {
       if (!edgeUpdate.toHandle) {
         setEdges((eds) => eds.filter((e) => e.id !== edge.id));
         if (edge.source === "root") {
-          api.setRoot({ chainId: chainRef.id, nodeId: null });
+          const root_edges = reactFlowInstance
+            .getEdges()
+            .filter((e) => e.source === "root" && e.id !== edge.id);
+          const root_node_ids = root_edges.map((edge) => edge.target);
+          api.setRoots(chain.id, { node_ids: root_node_ids });
         } else {
-          api.deleteEdge({ id: edge.data.id });
+          api.deleteEdge(edge.data.id);
         }
       }
       edgeUpdate.edge = null;
     },
-    [chainRef?.id, setEdges]
+    [chain?.id, setEdges, reactFlowInstance]
   );
 
   const { callback: debouncedChainUpdate } = useDebounce((...args) => {
     api.updateChain(...args);
-  }, 1000);
+  }, 500);
 
+  const { callback: debouncedChainCreate } = useDebounce((...args) => {
+    api.createChain(...args);
+  }, 800);
+
+  const onChainUpdate = useChainUpdate(chain, setChain, api);
   const onTitleChange = useCallback(
     (event) => {
-      setChainRef({ ...chainRef, name: event.target.value });
-      if (!chainLoaded) {
-        debouncedChainUpdate(
-          { data: { name: event.target.value } },
-          {
-            onCompleted: (data) => {
-              navigate(`/chains/${data.updateChain.chain.id}`, {
-                replace: true,
-              });
-              setChainRef(data.updateChain.chain);
-              setChainLoaded(true);
-            },
-          }
-        );
-      } else {
-        debouncedChainUpdate({
-          data: { ...chainRef, name: event.target.value },
-        });
-      }
+      onChainUpdate({ ...chain, name: event.target.value });
     },
-    [chainRef, api, chainLoaded]
+    [chain, onChainUpdate]
   );
 
+  const onSelectionChange = useCallback((selection) => {
+    if (selection?.nodes?.length === 0) {
+      setSelectedConnector(null);
+    }
+  }, []);
+
+  // New chains need a specific viewport because fitview
+  // centers the root node.
+  const displayProps = React.useMemo(() => {
+    if (graph?.chain?.id) {
+      return {
+        fitView: true,
+        fitViewOptions: {
+          minZoom: 0,
+          maxZoom: 1,
+        },
+      };
+    } else {
+      return {
+        defaultViewport: {
+          x: 0,
+          y: 0,
+          zoom: 1,
+        },
+      };
+    }
+  }, [graph?.chain?.id]);
+
+  const { toggleSidebar } = useRightSidebarContext();
   return (
     <Box height="93vh">
-      <Box pb={1}>
-        <Input
-          size="sm"
-          value={chainRef?.name || "Unnamed"}
-          width={300}
-          borderColor="transparent"
-          _hover={{
-            border: "1px solid",
-            borderColor: "gray.500",
-          }}
-          onChange={onTitleChange}
+      <Box display="flex" alignItems="center">
+        <Box pb={1}>
+          <Input
+            size="sm"
+            placeholder={"Unnamed Chain"}
+            value={chain?.name || ""}
+            width={300}
+            borderColor="transparent"
+            _hover={{
+              border: "1px solid",
+              borderColor: "gray.500",
+            }}
+            onChange={onTitleChange}
+          />
+        </Box>
+
+        <IconButton
+          ml="auto"
+          icon={<FontAwesomeIcon icon={faRightLeft} />}
+          onClick={toggleSidebar}
+          aria-label="Open Sidebar"
+          title={"Open Sidebar"}
         />
       </Box>
-      <ChainEditorAPIContext.Provider value={api}>
-        <Box ref={reactFlowWrapper} width={"85vw"} height={"100%"}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            isValidConnection={isValidConnection}
-            onInit={setReactFlowInstance}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            onNodeDragStop={onNodeDragStop}
-            onNodesChange={onFilteredNodesChange}
-            onEdgesChange={onEdgesChange}
-            onEdgeUpdate={onEdgeUpdate}
-            onEdgeUpdateStart={onEdgeUpdateStart}
-            onEdgeUpdateEnd={onEdgeUpdateEnd}
-            nodeTypes={nodeTypes}
-            onConnect={onConnect}
-            fitView
-          >
-            <Controls />
-            <Background
-              color={colorMode === "light" ? "#111" : "#aaa"}
-              gap={16}
-            />
-          </ReactFlow>
-        </Box>
-      </ChainEditorAPIContext.Provider>
+      <Box ref={reactFlowWrapper} width={"calc(100vw - 100px)"} height={"100%"}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          isValidConnection={isValidConnection}
+          onInit={setReactFlowInstance}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          onNodeDragStop={onNodeDragStop}
+          onNodesChange={onFilteredNodesChange}
+          onEdgesChange={onEdgesChange}
+          onEdgeUpdate={onEdgeUpdate}
+          onEdgeUpdateStart={onEdgeUpdateStart}
+          onEdgeUpdateEnd={onEdgeUpdateEnd}
+          onSelectionChange={onSelectionChange}
+          nodeTypes={nodeTypes}
+          onConnect={onConnect}
+          {...displayProps}
+          snapToGrid={true}
+          snapGrid={[10, 10]}
+        >
+          <Controls />
+          <Background
+            color={colorMode === "light" ? "#111" : "#aaa"}
+            gap={16}
+          />
+        </ReactFlow>
+      </Box>
     </Box>
   );
 };

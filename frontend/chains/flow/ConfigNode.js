@@ -1,75 +1,105 @@
-import React, {
-  useCallback,
-  useContext,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { Box, Flex, Heading, VStack } from "@chakra-ui/react";
-import { Handle, useReactFlow } from "reactflow";
+import React, { useCallback, useContext, useMemo } from "react";
+import { Box, Flex, Heading, HStack, Text, VStack } from "@chakra-ui/react";
+import { Handle, useEdges, useReactFlow } from "reactflow";
 import { faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useEditorColorMode } from "chains/editor/useColorMode";
-import { PromptNode } from "chains/flow/PromptNode";
 import { ChainEditorAPIContext } from "chains/editor/ChainEditorAPIContext";
-import { TypeAutoFields } from "chains/flow/TypeAutoFields";
-import { CollapsibleSection } from "chains/flow/CollapsibleSection";
-import { useDebounce } from "utils/hooks/useDebounce";
-import { FunctionSchemaNode } from "chains/flow/FunctionSchemaNode";
 import { DEFAULT_NODE_STYLE, NODE_STYLES } from "chains/editor/styles";
-
-const NODE_COMPONENTS = {
-  "langchain.prompts.chat.ChatPromptTemplate": PromptNode,
-  "ix.chains.functions.FunctionSchema": FunctionSchemaNode,
-};
+import { RequiredAsterisk } from "components/RequiredAsterisk";
+import { ConnectorPopover } from "chains/editor/ConnectorPopover";
+import {
+  NodeStateContext,
+  RunLog,
+  SelectedNodeContext,
+} from "chains/editor/contexts";
+import { StyledIcon } from "components/StyledIcon";
+import { NodeExecutionIcon } from "chains/editor/run_log/NodeExecutionIcon";
 
 const CONNECTOR_CONFIG = {
   agent: {
-    source_position: "left",
-    target_position: "right",
+    source_position: "right",
+    target_position: "left",
   },
   chain: {
-    source_position: "left",
-    target_position: "right",
+    source_position: "right",
+    target_position: "left",
   },
   tool: {
-    source_position: "left",
-    target_position: "right",
+    source_position: "right",
+    target_position: "left",
+  },
+  toolkit: {
+    source_position: "right",
+    target_position: "left",
   },
 };
 
-const usePropertyTargets = (type) => {
+const usePropertyTargets = (node, type) => {
+  const edges = useEdges();
+
   return useMemo(() => {
-    return type.connectors?.filter((connector) => connector.type === "target");
-  }, [type]);
+    const connectors = type.connectors;
+    return connectors?.map((connector) => {
+      const edge = edges?.find(
+        (edge) =>
+          (edge.target === node.id && edge.targetHandle === connector.key) ||
+          (edge.source === node.id && edge.sourceHandle === connector.key)
+      );
+      return { ...connector, connected: !!edge };
+    });
+  }, [type, edges, node.id]);
 };
 
-export const PropertyTarget = ({ connector }) => {
+export const useConnectorColor = (node, connector) => {
+  const { selectedConnector } = useContext(SelectedNodeContext);
+  const { connector: connectorStyle } = useEditorColorMode();
+  if (
+    connector.key === selectedConnector?.connector.key &&
+    node.id === selectedConnector?.node.id
+  ) {
+    return connectorStyle.selected;
+  } else if (connector.connected) {
+    return connectorStyle.connected;
+  } else if (connector.required) {
+    return connectorStyle.required;
+  } else {
+    return connectorStyle.default;
+  }
+};
+
+export const PropertyTarget = ({ type, node, connector }) => {
+  const color = useConnectorColor(node, connector);
+  const position = connector.type === "source" ? "right" : "left";
+
   return (
     <Box position="relative" width="100%">
-      <Handle
-        id={connector.key}
-        type="target"
-        position={
-          CONNECTOR_CONFIG[connector.sourceType]?.target_position || "left"
-        }
-      />
-      <Box px={2} m={0}>
-        {connector.key}
+      <Handle id={connector.key} type={connector.type} position={position} />
+      <Box px={2} m={0} color={color}>
+        <ConnectorPopover
+          type={type}
+          node={node}
+          connector={connector}
+          placement={position}
+        />{" "}
+        {connector.required && <RequiredAsterisk color={color} />}
       </Box>
     </Box>
   );
 };
 
-export const NodeProperties = ({ type }) => {
-  const propertyTargets = usePropertyTargets(type);
+export const NodeProperties = ({ node, type }) => {
+  const propertyTargets = usePropertyTargets(node, type);
 
   // sort properties into left and right
   const left = [];
   const right = [];
   propertyTargets?.forEach((connector) => {
-    const position =
-      CONNECTOR_CONFIG[connector.sourceType]?.target_position || "left";
+    if (connector.key === "in" || connector.key === "out") {
+      return;
+    }
+
+    const position = connector.type === "source" ? "right" : "left";
     if (position === "right") {
       right.push(connector);
     } else {
@@ -81,25 +111,32 @@ export const NodeProperties = ({ type }) => {
     <Flex justify={"space-between"}>
       <VStack spacing={0} cursor="default">
         {left?.map((connector, index) => (
-          <PropertyTarget key={index} connector={connector} />
+          <PropertyTarget
+            key={index}
+            type={type}
+            node={node}
+            connector={connector}
+          />
         ))}
       </VStack>
       <VStack spacing={0} cursor="default">
         {right?.map((connector, index) => (
-          <PropertyTarget key={index} connector={connector} />
+          <PropertyTarget
+            key={index}
+            type={type}
+            node={node}
+            connector={connector}
+          />
         ))}
       </VStack>
     </Flex>
   );
 };
 
-export const DefaultNodeContent = ({ type, config, onFieldChange }) => {
+export const DefaultNodeContent = ({ type, node }) => {
   return (
     <>
-      <NodeProperties type={type} />
-      <CollapsibleSection title="Config">
-        <TypeAutoFields type={type} config={config} onChange={onFieldChange} />
-      </CollapsibleSection>
+      <NodeProperties node={node} type={type} />
     </>
   );
 };
@@ -110,7 +147,7 @@ const DeleteIcon = ({ node }) => {
 
   const onClick = useCallback(
     (event) => {
-      api.deleteNode({ id: node.id });
+      api.deleteNode(node.id);
     },
     [node.id, api]
   );
@@ -122,60 +159,47 @@ const DeleteIcon = ({ node }) => {
   );
 };
 
-export const ConfigNode = ({ data }) => {
-  const { type, node } = data;
+export const ConfigNode = ({ id, data, selected }) => {
+  const { type } = data;
   const styles = NODE_STYLES[type.type] || DEFAULT_NODE_STYLE;
-  const { border, color, highlight, highlightColor, bg } = useEditorColorMode();
-  const [config, setConfig] = useState(node.config);
+  const { border, color, highlight, highlightColor, bg, selectionShadow } =
+    useEditorColorMode();
+  const position = CONNECTOR_CONFIG[type.type]?.source_position || "right";
+  const { nodes } = useContext(NodeStateContext);
+  const node = nodes[data.node.id];
 
-  const api = useContext(ChainEditorAPIContext);
+  // run log when available
+  const { log_by_node } = React.useContext(RunLog);
+  const run_event = log_by_node[node?.id];
 
-  // ref for handlers to access latest config without re-rendering
-  const configRef = useRef();
-  configRef.current = config;
-
-  const { callback: debouncedUpdateNode } = useDebounce(api.updateNode, 1000);
-  const handleConfigChange = useMemo(() => {
-    function all(newConfig, delay = 0) {
-      const data = {
-        id: node.id,
-        classPath: node.classPath,
-        description: node.description,
-        position: node.position,
-        config: newConfig,
-      };
-      debouncedUpdateNode({ data });
-      setConfig(newConfig);
-    }
-
-    const field = (key, value, delay = 1000) => {
-      const newConfig = { ...configRef.current, [key]: value };
-      all(newConfig, delay);
-    };
-
-    return { all, field };
-  }, [node.id, api, configRef]);
+  const nodeStyle = {
+    color,
+    border: "1px solid",
+    borderColor: border,
+    backgroundColor: bg,
+    boxShadow: selected ? selectionShadow : "md",
+  };
 
   // node type specific content
-  let NodeComponent = null;
-  if (NODE_COMPONENTS[node.classPath]) {
-    NodeComponent = NODE_COMPONENTS[node.classPath];
-  } else if (styles?.component) {
-    NodeComponent = styles.component;
+  const content = React.useMemo(() => {
+    let NodeComponent = null;
+    if (styles?.component) {
+      NodeComponent = styles.component;
+    }
+    const node_component_props = {
+      type,
+      node,
+    };
+    return NodeComponent ? (
+      <NodeComponent {...node_component_props} />
+    ) : (
+      <DefaultNodeContent {...node_component_props} />
+    );
+  }, [type, node, styles]);
+
+  if (!node) {
+    return null;
   }
-  const node_component_props = {
-    type,
-    node,
-    config,
-    onChange: handleConfigChange.all,
-    onFieldChange: handleConfigChange.field,
-  };
-  const content = NodeComponent ? (
-    <NodeComponent {...node_component_props} />
-  ) : (
-    <DefaultNodeContent {...node_component_props} />
-  );
-  const position = CONNECTOR_CONFIG[type.type]?.source_position || "right";
 
   return (
     <Box p={5} className="config-node">
@@ -183,12 +207,8 @@ export const ConfigNode = ({ data }) => {
         borderWidth="0px"
         borderRadius={8}
         padding="0"
-        border="1px solid"
-        borderColor={border}
-        backgroundColor={bg}
-        minWidth={styles?.width || 250}
-        color={color}
-        boxShadow="md"
+        minWidth={200}
+        {...nodeStyle}
       >
         <Handle
           id={type.type}
@@ -212,13 +232,18 @@ export const ConfigNode = ({ data }) => {
           className="drag-handle"
         >
           <Flex alignItems="center" justifyContent="space-between" width="100%">
-            <Box pr={5}>
-              <FontAwesomeIcon icon={styles?.icon} />{" "}
-              {node.name || type?.name || node.classPath.split(".").pop()}
-            </Box>
+            <HStack pr={5} h={"16px"}>
+              <StyledIcon style={styles?.icon} />{" "}
+              <Text>
+                {node.name || type?.name || node.class_path.split(".").pop()}
+              </Text>
+            </HStack>
             <DeleteIcon node={node} />
           </Flex>
         </Heading>
+        <Box position={"absolute"} top={5} right={0}>
+          <NodeExecutionIcon node={node} />
+        </Box>
         <Box minHeight={25} cursor="default">
           {content}
         </Box>

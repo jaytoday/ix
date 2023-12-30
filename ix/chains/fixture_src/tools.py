@@ -1,19 +1,20 @@
-from ix.chains.fixture_src.targets import CHAIN_TARGET
-from langchain import (
-    GoogleSearchAPIWrapper,
-    GoogleSerperAPIWrapper,
-    ArxivAPIWrapper,
-    WikipediaAPIWrapper,
+from ix.chains.fixture_src.targets import (
+    CHAIN_TARGET,
 )
 from langchain.utilities import (
+    ArxivAPIWrapper,
     BingSearchAPIWrapper,
     DuckDuckGoSearchAPIWrapper,
+    GoogleSearchAPIWrapper,
+    GoogleSerperAPIWrapper,
     GraphQLAPIWrapper,
     LambdaWrapper,
     PubMedAPIWrapper,
+    WikipediaAPIWrapper,
+    ZapierNLAWrapper,
 )
 
-from ix.api.chains.types import NodeTypeField
+from ix.api.components.types import NodeTypeField
 from ix.chains.fixture_src.common import VERBOSE
 
 NAME = {
@@ -27,7 +28,7 @@ DESCRIPTION = {
     "name": "description",
     "type": "str",
     "default": "",
-    "input": "textarea",
+    "input_type": "textarea",
     "style": {"width": "100%"},
 }
 
@@ -68,7 +69,8 @@ BING_SEARCH = {
         include=["bing_subscription_key", "bing_search_url", "k"],
         field_options={
             "bing_subscription_key": {
-                "input": "secret",
+                "input_type": "secret",
+                "secret_key": "Bing",
             },
             "bing_search_url": {
                 "style": {"width": "100%"},
@@ -109,10 +111,12 @@ GOOGLE_SEARCH = {
         include=["google_api_key", "google_cse_id", "k", "siterestrict"],
         field_options={
             "google_api_key": {
-                "input": "secret",
+                "input_type": "secret",
+                "secret_key": "Google Search API",
             },
             "google_cse_id": {
-                "input": "secret",
+                "input_type": "secret",
+                "secret_key": "Google Search API",
             },
         },
     ),
@@ -129,7 +133,8 @@ GOOGLE_SERPER = {
         include=["k", "gl", "hl", "type", "tbs", "serper_api_key"],
         field_options={
             "serper_api_key": {
-                "input": "secret",
+                "input_type": "secret",
+                "secret_key": "Serper API",
             },
         },
     ),
@@ -167,10 +172,8 @@ PUB_MED = {
         include=[
             "max_retry",
             "top_k_results",
-            "load_max_docs",
             "ARXIV_MAX_QUERY_LENGTH",
             "doc_content_chars_max",
-            "load_all_available_meta",
             "email",
         ],
     ),
@@ -193,6 +196,41 @@ WIKIPEDIA = {
     ),
 }
 
+METAPHOR_SEARCH_CLASS_PATH = "ix.tools.metaphor.get_metaphor_search"
+METAPHOR_CONTENTS_CLASS_PATH = "ix.tools.metaphor.get_metaphor_contents"
+METAPHOR_FIND_SIMILAR_CLASS_PATH = "ix.tools.metaphor.get_metaphor_find_similar"
+METAPHOR_API_KEY = {
+    "name": "metaphor_api_key",
+    "label": "Metaphor API Key",
+    "type": "str",
+    "input_type": "secret",
+    "secret_key": "Metaphor API",
+    "required": True,
+}
+METAPHOR_SEARCH = {
+    "name": "Metaphor search",
+    "description": "Metaphor search queries",
+    "class_path": METAPHOR_SEARCH_CLASS_PATH,
+    "type": "tool",
+    "fields": TOOL_BASE_FIELDS + [METAPHOR_API_KEY],
+}
+
+METAPHOR_CONTENTS = {
+    "name": "Metaphor page contents",
+    "description": "Metaphor page contents",
+    "class_path": METAPHOR_CONTENTS_CLASS_PATH,
+    "type": "tool",
+    "fields": TOOL_BASE_FIELDS + [METAPHOR_API_KEY],
+}
+
+METAPHOR_SIMILAR = {
+    "name": "Metaphor find similar",
+    "description": "Metaphor find similar pages",
+    "class_path": METAPHOR_FIND_SIMILAR_CLASS_PATH,
+    "type": "tool",
+    "fields": TOOL_BASE_FIELDS + [METAPHOR_API_KEY],
+}
+
 
 WOLFRAM = {
     "name": "Wolfram Alpha",
@@ -206,11 +244,42 @@ WOLFRAM = {
             "name": "wolfram_alpha_app_id",
             "label": "Wolfram Alpha App ID",
             "type": "str",
-            "input": "secret",
+            "input_type": "secret",
+            "secret_key": "Wolfram Alpha API",
         },
     ],
 }
 
+ZAPIER = {
+    "name": "Zapier",
+    "description": "Tools for interacting with Zapier tasks",
+    "class_path": "ix.tools.zapier.zapier_toolkit",
+    "type": "tool",
+    "fields": NodeTypeField.get_fields(
+        ZapierNLAWrapper,
+        include=[
+            "zapier_nla_api_key",
+            "zapier_nla_oauth_access_token",
+            "zapier_nla_api_base",
+        ],
+        field_options={
+            "zapier_nla_api_key": {
+                "label": "API Key",
+                "input_type": "secret",
+                "secret_key": "Zapier NLA API",
+            },
+            "zapier_nla_oauth_access_token": {
+                "label": "OAuth Token",
+                "input_type": "secret",
+                "secret_key": "Zapier NLA OAuth",
+            },
+            "zapier_nla_api_base": {
+                "label": "API Base",
+                "style": {"width": "100%"},
+            },
+        },
+    ),
+}
 
 TOOLS = [
     ARXIV_SEARCH,
@@ -223,5 +292,9 @@ TOOLS = [
     LAMBDA_API,
     PUB_MED,
     WIKIPEDIA,
+    METAPHOR_SEARCH,
+    METAPHOR_CONTENTS,
+    METAPHOR_SIMILAR,
     WOLFRAM,
+    ZAPIER,
 ]

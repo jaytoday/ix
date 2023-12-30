@@ -1,13 +1,5 @@
 import React, { useCallback, useState } from "react";
-import {
-  Button,
-  Flex,
-  Textarea,
-  Select,
-  VStack,
-  HStack,
-  Text,
-} from "@chakra-ui/react";
+import { Button, Flex, Select, VStack, HStack, Text } from "@chakra-ui/react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faTrashAlt,
@@ -15,10 +7,10 @@ import {
   faArrowUp,
   faArrowDown,
 } from "@fortawesome/free-solid-svg-icons";
-import { SCROLLBAR_CSS } from "site/css";
-import { NodeResizeControl } from "reactflow";
+import { useEditorColorMode } from "chains/editor/useColorMode";
+import { PromptMessageInput } from "chains/editor/PromptMessageInput";
 
-const ROLE_OPTIONS = ["user", "assistant"];
+const ROLE_OPTIONS = ["system", "user", "assistant"];
 
 const DEFAULT_MESSAGE = {
   role: "user",
@@ -50,6 +42,8 @@ function parseVariables(str) {
 
 const PromptEditor = ({ data, onChange }) => {
   const [messages, setMessages] = useState(data.messages || DEFAULT_MESSAGES);
+  const { input, scrollbar } = useEditorColorMode();
+
   const handleOnChange = useCallback(
     (updatedMessages) => {
       if (onChange !== undefined) {
@@ -100,39 +94,30 @@ const PromptEditor = ({ data, onChange }) => {
 
   return (
     <VStack spacing={1} align="stretch">
-      <NodeResizeControl
-        variant={"line"}
-        minWidth={400}
-        position={"left"}
-        h={"100%"}
-        style={{ border: "5px solid transparent" }}
-      />
-
       {messages.map((message, index) => (
-        <VStack key={index} p={2} spacing={2}>
+        <VStack key={index} py={2} spacing={2}>
           <Flex
             alignItems="center"
             justifyContent="space-between"
             width="100%"
             height="100%"
           >
-            {index === 0 ? (
-              <Text fontWeight="bold">System</Text>
-            ) : (
-              <Select
-                width={125}
-                value={message.role}
-                onChange={(e) =>
-                  handleMessageChange(index, "role", e.target.value)
-                }
-              >
-                {ROLE_OPTIONS.map((role) => (
-                  <option key={role} value={role}>
-                    {role}
-                  </option>
-                ))}
-              </Select>
-            )}
+            <Select
+              {...input}
+              size={"sm"}
+              borderRadius={5}
+              width={125}
+              value={message.role}
+              onChange={(e) =>
+                handleMessageChange(index, "role", e.target.value)
+              }
+            >
+              {ROLE_OPTIONS.map((role) => (
+                <option key={role} value={role}>
+                  {role}
+                </option>
+              ))}
+            </Select>
             <HStack spacing={5}>
               {index > 1 && (
                 <FontAwesomeIcon
@@ -148,24 +133,23 @@ const PromptEditor = ({ data, onChange }) => {
                   onClick={() => moveMessage(index, 1)}
                 />
               )}
-              {index > 0 && (
-                <FontAwesomeIcon
-                  icon={faTrashAlt}
-                  cursor="pointer"
-                  onClick={() => deleteMessage(index)}
-                />
-              )}
+              <FontAwesomeIcon
+                icon={faTrashAlt}
+                cursor="pointer"
+                onClick={() => deleteMessage(index)}
+              />
             </HStack>
           </Flex>
-          <Textarea
+
+          <PromptMessageInput
+            borderRadius={5}
+            border="1px solid"
+            p={2}
             width="100%"
-            value={message.template}
+            initialValue={message.template}
             placeholder="Enter template"
-            onChange={(e) =>
-              handleMessageChange(index, "template", e.target.value)
-            }
-            isRequired
-            css={SCROLLBAR_CSS}
+            onChange={(text) => handleMessageChange(index, "template", text)}
+            {...input}
           />
         </VStack>
       ))}
@@ -175,17 +159,12 @@ const PromptEditor = ({ data, onChange }) => {
           leftIcon={<FontAwesomeIcon icon={faPlus} />}
           colorScheme="orange"
           onClick={addMessage}
-          mr={4}
+          mr={2}
+          size={"sm"}
         >
           Add Message
         </Button>
       </Flex>
-      <NodeResizeControl
-        variant={"line"}
-        minWidth={400}
-        h={"100%"}
-        style={{ border: "5px solid transparent" }}
-      />
     </VStack>
   );
 };

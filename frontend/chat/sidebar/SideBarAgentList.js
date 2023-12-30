@@ -1,16 +1,13 @@
 import React from "react";
 import { HStack, VStack, Text, Box, useColorModeValue } from "@chakra-ui/react";
-import { usePreloadedQuery } from "react-relay/hooks";
-import { ChatByIdQuery } from "chat/graphql/ChatByIdQuery";
-import AssistantAvatar from "chat/AssistantAvatar";
+import AssistantAvatar from "chat/avatars/AssistantAvatar";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faSquareMinus, faUserPlus } from "@fortawesome/free-solid-svg-icons";
+import { faSquareMinus } from "@fortawesome/free-solid-svg-icons";
 import RemoveAgentModalTrigger from "chat/agents/RemoveAgentModalTrigger";
-import AddAgentModalTrigger from "chat/agents/AddAgentModalTrigger";
 import { useColorMode } from "@chakra-ui/color-mode";
 
-const AgentListItem = ({ chat, agent }) => {
-  const avatarColor = useColorModeValue("gray.700", "gray.400");
+const AgentListItem = ({ chat, agent, onUpdateAgents }) => {
+  const avatarColor = useColorModeValue("blue.400", "blue.300");
 
   return (
     <Box bg="transparent" width="100%">
@@ -25,8 +22,12 @@ const AgentListItem = ({ chat, agent }) => {
             color: "whiteAlpha.400",
           }}
         >
-          {agent.id === chat.lead.id ? null : (
-            <RemoveAgentModalTrigger chat={chat} agent={agent}>
+          {agent.id === chat.lead_id ? null : (
+            <RemoveAgentModalTrigger
+              chat={chat}
+              agent={agent}
+              onSuccess={onUpdateAgents}
+            >
               <FontAwesomeIcon icon={faSquareMinus} />
             </RemoveAgentModalTrigger>
           )}
@@ -35,11 +36,11 @@ const AgentListItem = ({ chat, agent }) => {
     </Box>
   );
 };
-const SideBarAgentList = ({ queryRef }) => {
-  const { chat } = usePreloadedQuery(ChatByIdQuery, queryRef);
+
+const SideBarAgentList = ({ graph, onUpdateAgents, agentPage }) => {
   const { colorMode } = useColorMode();
-  const lead = chat.lead;
-  const agents = chat.agents;
+  const lead = graph.lead;
+  const agents = agentPage?.objects;
 
   return (
     <Box
@@ -47,30 +48,21 @@ const SideBarAgentList = ({ queryRef }) => {
       px={3}
       pb={3}
       pt={1}
-      border="1px solid"
+      border="0px solid"
       borderRadius={5}
-      borderColor={colorMode === "light" ? "gray.400" : "gray.700"}
-      bg={colorMode === "light" ? "gray.300" : "gray.800"}
+      borderColor={colorMode === "light" ? "gray.300" : "gray.600"}
+      bg={colorMode === "light" ? "transparent" : "transparent"}
       color={colorMode === "light" ? "gray.800" : "gray.300"}
     >
-      <HStack
-        width="100%"
-        mb={2}
-        color={colorMode === "light" ? "gray.800" : "whiteAlpha.500"}
-      >
-        <Text fontSize="xs" fontWeight="bold" mb={2}>
-          Agents
-        </Text>
-        <Box width="100%" align="right">
-          <AddAgentModalTrigger chat={chat}>
-            <FontAwesomeIcon icon={faUserPlus} />
-          </AddAgentModalTrigger>
-        </Box>
-      </HStack>
       <VStack spacing={3}>
-        <AgentListItem agent={lead} chat={chat} />
+        <AgentListItem agent={lead} chat={graph.chat} />
         {agents?.map((agent, i) => (
-          <AgentListItem key={i} chat={chat} agent={agent} />
+          <AgentListItem
+            key={i}
+            chat={graph.chat}
+            agent={agent}
+            onUpdateAgents={onUpdateAgents}
+          />
         ))}
       </VStack>
     </Box>

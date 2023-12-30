@@ -1,15 +1,38 @@
 import uuid
 from asgiref.sync import sync_to_async
 from datetime import datetime
-from django.contrib.auth.models import User
 
-from ix.chains.models import Chain, ChainNode, ChainEdge
-from ix.chains.tests.test_config_loader import LLM_CHAIN
+from ix.chains.models import NodeType, Chain, ChainNode, ChainEdge
+from ix.chains.tests.mock_configs import LLM_CHAIN
 from ix.chat.models import Chat
 from ix.task_log.models import Agent, Task, TaskLogMessage, Artifact
 from faker import Faker
 
+from ix.ix_users.tests.fake import fake_user
+
 fake = Faker()
+
+
+def fake_node_type(**kwargs):
+    """
+    Create a fake node type.
+    """
+    return NodeType.objects.create(
+        name=fake.unique.name(),
+        description=fake.text(),
+        type=fake.random_element(NodeType.TYPES)[0],
+        class_path=fake.text(),
+        config_schema={},
+        user=kwargs.get("user", None),
+        group=kwargs.get("group", None),
+    )
+
+
+async def afake_node_type(**kwargs):
+    """
+    Create a fake node type.
+    """
+    return await sync_to_async(fake_node_type)(**kwargs)
 
 
 def fake_chain(**kwargs):
@@ -20,6 +43,8 @@ def fake_chain(**kwargs):
         id=uuid.uuid4(),
         name=fake.unique.name(),
         description=fake.text(),
+        user=kwargs.get("user", None),
+        group=kwargs.get("group", None),
     )
     chain_kwargs.update(kwargs)
     chain = Chain.objects.create(**chain_kwargs)
@@ -55,6 +80,9 @@ async def afake_chain_node(**kwargs):
 
 
 def fake_chain_edge(**kwargs):
+    if "key" in kwargs:
+        raise ValueError("key is deprecated, use target_key instead")
+
     chain = kwargs.get("chain", fake_chain())
 
     source_node = kwargs.get("source")
@@ -68,9 +96,11 @@ def fake_chain_edge(**kwargs):
     edge = ChainEdge.objects.create(
         source=source_node,
         target=target_node,
-        key=kwargs.get("key", "default_key"),
+        source_key=kwargs.get("source_key", source_node.node_type.type),
+        target_key=kwargs.get("target_key", "default_key"),
         chain=chain,
         input_map=kwargs.get("input_map", {}),
+        relation=kwargs.get("relation", "LINK"),
     )
 
     return edge
@@ -91,9 +121,6 @@ def fake_agent(**kwargs):
     alias = kwargs.get("alias", name)
     purpose = kwargs.get("purpose", fake.text())
     model = kwargs.get("model", "gpt-3.5-turbo")
-    agent_class_path = kwargs.get(
-        "agent_class_path", "ix.agents.planning_agent.PlanningAgent"
-    )
     config = kwargs.get(
         "config",
         {
@@ -112,30 +139,39 @@ def fake_agent(**kwargs):
         model=model,
         config=config,
         chain=chain,
-        agent_class_path=agent_class_path,
+        user=kwargs.get("user", None),
+        group=kwargs.get("group", None),
     )
     return agent
 
 
-def fake_user(**kwargs):
-    username = kwargs.get("username", fake.unique.user_name())
-    email = kwargs.get("email", fake.unique.email())
-    password = kwargs.get("password", fake.password())
-
-    user = User.objects.create_user(username=username, email=email, password=password)
-    return user
+async def afake_agent(**kwargs):
+    return await sync_to_async(fake_agent)(**kwargs)
 
 
 def fake_task(**kwargs):
-    user = kwargs.get("user") or fake_user()
-    agent = kwargs.get("agent") or fake_agent()
-    task = Task.objects.create(user=user, agent=agent, chain=agent.chain)
+    user = kwargs.pop("user", None) or fake_user()
+    agent = kwargs.pop("agent", None) or fake_agent()
+    if "parent" in kwargs:
+        root_id = (
+            kwargs["parent"].root_id
+            if kwargs["parent"].root_id
+            else kwargs["parent"].id
+        )
+    elif "parent_id" in kwargs:
+        parent = Task.objects.get(pk=kwargs["parent_id"])
+        root_id = parent.root_id if parent.root_id else parent.id
+    else:
+        root_id = kwargs.pop("root_id", None)
+    task = Task.objects.create(
+        user=user, agent=agent, chain=agent.chain, root_id=root_id, **kwargs
+    )
     return task
 
 
 def fake_think(**kwargs):
     content = {"type": "THINK", "input": {"user_input": "Test message"}}
-    return fake_task_log_msg(role="assistant", content=content, **kwargs)
+    return fake_task_log_msg(role="ASSISTANT", content=content, **kwargs)
 
 
 def fake_command_reply(**kwargs):
@@ -150,7 +186,7 @@ def fake_command_reply(**kwargs):
         },
         "command": {"name": "echo", "args": {"output": "this is a test"}},
     }
-    return fake_task_log_msg(role="assistant", content=content, **kwargs)
+    return fake_task_log_msg(role="ASSISTANT", content=content, **kwargs)
 
 
 def fake_feedback_request(task: Task = None, question: str = None, **kwargs):
@@ -158,14 +194,14 @@ def fake_feedback_request(task: Task = None, question: str = None, **kwargs):
         "type": "FEEDBACK_REQUEST",
         "question": question or "this is a fake question",
     }
-    return fake_task_log_msg(role="assistant", content=content, task=task, **kwargs)
+    return fake_task_log_msg(role="ASSISTANT", content=content, task=task, **kwargs)
 
 
 def fake_auth_request(task: Task = None, message_id: uuid.UUID = None, **kwargs):
     if not message_id:
         message_id = fake_command_reply(task=task).id
     content = {"type": "AUTH_REQUEST", "message_id": str(message_id)}
-    return fake_task_log_msg(role="assistant", content=content, task=task, **kwargs)
+    return fake_task_log_msg(role="ASSISTANT", content=content, task=task, **kwargs)
 
 
 def fake_execute(task: Task = None, message_id: uuid.UUID = None, **kwargs):
@@ -176,7 +212,7 @@ def fake_execute(task: Task = None, message_id: uuid.UUID = None, **kwargs):
         "message_id": str(message_id),
         "output": "fake output from mock command",
     }
-    return fake_task_log_msg(role="assistant", content=content, task=task, **kwargs)
+    return fake_task_log_msg(role="ASSISTANT", content=content, task=task, **kwargs)
 
 
 def fake_feedback(
@@ -187,24 +223,24 @@ def fake_feedback(
         feedback_request = fake_feedback_request(task=task, question="test question")
         content["message_id"] = str(feedback_request.id)
 
-    return fake_task_log_msg(role="user", content=content, task=task, **kwargs)
+    return fake_task_log_msg(role="USER", content=content, task=task, **kwargs)
 
 
 def fake_authorize(task: Task = None, message_id: uuid.UUID = None, **kwargs):
     if not message_id:
         message_id = fake_feedback_request(task=task).id
     content = {"type": "AUTHORIZE", "message_id": str(message_id), "n": 1}
-    return fake_task_log_msg(role="user", content=content, **kwargs)
+    return fake_task_log_msg(role="USER", content=content, **kwargs)
 
 
 def fake_autonomous_toggle(enabled: int = 1, **kwargs):
     content = {"type": "AUTONOMOUS", "enabled": enabled}
-    return fake_task_log_msg(role="user", content=content, **kwargs)
+    return fake_task_log_msg(role="USER", content=content, **kwargs)
 
 
 def fake_system(message: str, **kwargs):
     content = {"type": "SYSTEM", "message": message}
-    return fake_task_log_msg(role="system", content=content, **kwargs)
+    return fake_task_log_msg(role="SYSTEM", content=content, **kwargs)
 
 
 def fake_execute_error(task: Task = None, message_id: uuid.UUID = None, **kwargs):
@@ -216,7 +252,7 @@ def fake_execute_error(task: Task = None, message_id: uuid.UUID = None, **kwargs
         "error_type": "test error",
         "text": "test error text",
     }
-    return fake_task_log_msg(role="system", content=content, **kwargs)
+    return fake_task_log_msg(role="SYSTEM", content=content, **kwargs)
 
 
 def fake_task_log_msg_type(content_type, **kwargs):
@@ -304,7 +340,6 @@ def fake_planner():
     agent = fake_agent(
         name="Planner",
         purpose="Plan tasks for other agents to perform",
-        agent_class_path="ix.agents.process.AgentProcess",
         system_prompt="",
         commands=[],
         config={
@@ -321,6 +356,7 @@ DEFAULT_CHAT_ID = "f0034449-f226-44b2-9036-ca49f7d2348e"
 
 def fake_chat(**kwargs):
     chat_id = kwargs.get("id", DEFAULT_CHAT_ID)
+    name = kwargs.get("name", "Test Chat")
 
     Agent.objects.filter(leading_chats__pk=chat_id).delete()
     Chat.objects.filter(pk=chat_id).delete()
@@ -330,7 +366,14 @@ def fake_chat(**kwargs):
         task = kwargs["task"]
     else:
         task = fake_task(agent=agent)
-    chat = Chat.objects.create(id=chat_id, name="Test Chat", task=task, lead=agent)
+    chat = Chat.objects.create(
+        id=chat_id,
+        name=name,
+        task=task,
+        lead=agent,
+        user=kwargs.get("user", None),
+        group=kwargs.get("group", None),
+    )
 
     fake_feedback(
         task=task, feedback="create a django app for cat memes", message_id=-1
@@ -348,6 +391,8 @@ def fake_artifact(**kwargs) -> Artifact:
         name="Test Artifact 1",
         description="This is a test artifact (1)",
         storage={"type": "file", "id": "test_artifact"},
+        user=kwargs.get("user", None),
+        group=kwargs.get("group", None),
     )
     options.update(kwargs)
 
@@ -373,3 +418,4 @@ afake_think = sync_to_async(fake_think)
 afake_chat = sync_to_async(fake_chat)
 afake_task = sync_to_async(fake_task)
 afake_artifact = sync_to_async(fake_artifact)
+afake_system = sync_to_async(fake_system)
